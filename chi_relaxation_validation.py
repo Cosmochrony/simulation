@@ -330,11 +330,11 @@ def main() -> None:
     # - reduce diffusion (kappa)
     # - smaller chi_c => slopes more likely to saturate (S>1) persistently
     nonprojectable = CaseConfig(
-        name="nonprojectable",
-        smooth_init=False,
-        sigma=2.0,     # increase amplitude
-        kappa=0.0,     # remove diffusion that would "repair" the field
-        chi_c=0.3,     # make saturation more frequent
+      name="nonprojectable",
+      smooth_init=False,
+      sigma=2.0,
+      kappa=0.0,
+      chi_c=10.0,  # empêche K de s'effondrer
     )
 
     results = []
