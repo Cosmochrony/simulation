@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
+import csv
 
 # -----------------------
 # Discrete operators (periodic boundary conditions)
@@ -283,8 +284,9 @@ def run_case(cfg: CaseConfig,
     "eps_t": np.array(eps_t),
     "epsinf_t": np.array(epsinf_t),
     "sat_frac_t": np.array(sat_frac_t),
-    "final_eps_l2": eps_t[-1],
-    "final_eps_linf": epsinf_t[-1],
+    "epsilon_L2": float(eps_t[-1]),
+    "epsilon_Linf": float(epsinf_t[-1]),
+    "saturation_fraction": float(sat_frac_t[-1]),
   }
 
 
@@ -350,25 +352,24 @@ def main() -> None:
   )
 
   results = []
+  csv_rows = []
   for cfg in (smooth, rough, nonprojectable):
-    results.append(
-      run_case(
-        cfg=cfg,
-        N=args.N,
-        steps=args.steps,
-        dt=args.dt,
-        block=args.block,
-        seed=args.seed,
-        c=args.c,
-        K0=args.K0,
-        pre_iters=args.pre_iters,
-        pre_alpha=args.pre_alpha,
-        outdir=outdir,
-        save_fmt=args.save_fmt,
-        dpi=args.dpi,
-        no_softening=args.no_softening,
-      )
-    )
+    r = run_case(cfg=cfg, N=args.N, steps=args.steps, dt=args.dt, block=args.block, seed=args.seed, c=args.c,
+                    K0=args.K0, pre_iters=args.pre_iters, pre_alpha=args.pre_alpha, outdir=outdir,
+                    save_fmt=args.save_fmt, dpi=args.dpi, no_softening=args.no_softening, )
+    results.append(r)
+    csv_rows.append({
+      "case": r["name"],
+      "softening": str(not args.no_softening),
+      "K0": str(args.K0),
+      "N": str(args.N),
+      "block": str(args.block),
+      "dt": str(args.dt),
+      "steps": str(args.steps),
+      "epsilon_L2": str(r.get("epsilon_L2", r["eps_t"][-1] if "eps_t" in r else "")),
+      "epsilon_Linf": str(r.get("epsilon_Linf", r["epsinf_t"][-1] if "epsinf_t" in r else "")),
+      "saturation_fraction": str(r.get("saturation_fraction", r["sat_frac_t"][-1] if "sat_frac_t" in r else "")),
+    })
 
   # --- Combined comparison plot: epsilon(t) ---
   plt.figure()
@@ -403,6 +404,21 @@ def main() -> None:
   plt.close()
 
   print(f" - {p}")
+
+  csv_path = outdir / f"summary_D4_N{args.N}_b{args.block}_soft{int(not args.no_softening)}_K0{args.K0}.csv"
+  with open(csv_path, "w", newline="") as f:
+    writer = csv.DictWriter(
+      f,
+      fieldnames=[
+        "case", "softening", "K0", "N", "block", "dt", "steps",
+        "epsilon_L2", "epsilon_Linf", "saturation_fraction"
+      ],
+    )
+    writer.writeheader()
+    for row in csv_rows:
+      writer.writerow(row)
+
+  print(f" - {csv_path}")
 
 
 if __name__ == "__main__":
