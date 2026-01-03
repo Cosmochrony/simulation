@@ -26,6 +26,8 @@ OUTDIR.mkdir(parents=True, exist_ok=True)
 SAVE_FMT = "pdf"   # "pdf" recommandé pour LaTeX, sinon "png"
 DPI = 200          # utile si SAVE_FMT="png"
 
+# Failure mode toggle (second run)
+DO_FAILURE_MODE = True
 
 # -----------------------
 # Parameters (reproducible)
@@ -36,6 +38,8 @@ dt = 0.03       # time step
 c = 1.0         # maximal relaxation speed (unitless here)
 kappa = 0.12    # smoothing / relaxation diffusion strength
 block = 4       # coarse-graining block size (must divide N)
+K0 = 1.0         # dimensionless stiffness scale (toy)
+chi_c = 1.0      # characteristic variation scale (toy)
 
 seed = 0        # RNG seed for reproducibility
 
@@ -53,29 +57,47 @@ def laplacian(u: np.ndarray) -> np.ndarray:
     )
 
 
-def grad_sq(u: np.ndarray) -> np.ndarray:
-    """
-    Squared norm of central-difference gradient (grid spacing = 1),
-    with periodic boundary conditions.
-    """
-    gx = 0.5 * (np.roll(u, -1, 0) - np.roll(u, 1, 0))
-    gy = 0.5 * (np.roll(u, -1, 1) - np.roll(u, 1, 1))
-    gz = 0.5 * (np.roll(u, -1, 2) - np.roll(u, 1, 2))
-    return gx * gx + gy * gy + gz * gz
+def S_local(u: np.ndarray, K0: float, chi_c: float, c: float) -> np.ndarray:
+  """
+  Compute S_i = (1/c^2) * sum_{j in N(i)} K_ij * (u_i - u_j)^2
+  with nearest-neighbor graph and K_ij = K0 / (1 + (Δu/chi_c)^2).
+  Periodic boundary conditions.
+  """
+  # neighbor differences
+  dxp = u - np.roll(u, -1, 0)
+  dxm = u - np.roll(u, 1, 0)
+  dyp = u - np.roll(u, -1, 1)
+  dym = u - np.roll(u, 1, 1)
+  dzp = u - np.roll(u, -1, 2)
+  dzm = u - np.roll(u, 1, 2)
+
+  # K_ij for each directed neighbor edge
+  def K_of(d):
+    return K0 / (1.0 + (d / chi_c) ** 2)
+
+  S = (
+          K_of(dxp) * dxp * dxp +
+          K_of(dxm) * dxm * dxm +
+          K_of(dyp) * dyp * dyp +
+          K_of(dym) * dym * dym +
+          K_of(dzp) * dzp * dzp +
+          K_of(dzm) * dzm * dzm
+      ) / (c * c)
+
+  return S
 
 
-def evolve(u: np.ndarray, dt: float, c: float, kappa: float) -> np.ndarray:
-    """
-    One explicit update step:
-      u <- u + dt * ( c * sqrt(1 - |grad u|^2/c^2 ) + kappa * Laplacian(u) )
-
-    The sqrt term is clipped to avoid negative radicand (projectable-regime assumption).
-    """
-    g2 = grad_sq(u)
-    rad = np.clip(1.0 - g2 / (c * c), 0.0, None)
-    source = c * np.sqrt(rad)
-    return u + dt * (source + kappa * laplacian(u))
-
+def evolve(u: np.ndarray, dt: float, c: float, kappa: float, K0: float, chi_c: float) -> np.ndarray:
+  """
+  Explicit update:
+    S_i = (1/c^2) sum_j K_ij (u_i - u_j)^2
+    R_i = c * sqrt(max(0, 1 - S_i))   (saturation when S_i > 1)
+    u <- u + dt * ( R_i + kappa * Laplacian(u) )
+  """
+  S = S_local(u, K0=K0, chi_c=chi_c, c=c)
+  rad = np.clip(1.0 - S, 0.0, None)  # saturation: if S>1 -> rad=0 -> R=0
+  R = c * np.sqrt(rad)
+  return u + dt * (R + kappa * laplacian(u))
 
 def coarse_grain_block(u: np.ndarray, b: int) -> np.ndarray:
     """Block-average coarse graining. Requires N divisible by b."""
@@ -86,106 +108,150 @@ def coarse_grain_block(u: np.ndarray, b: int) -> np.ndarray:
     return u.reshape(n, b, n, b, n, b).mean(axis=(1, 3, 5))
 
 
+def compute_epsilon(chi_eff_prev, chi_eff_curr, dt: float, c: float, K0: float, chi_c: float):
+  """
+  Compute epsilon between LHS d/dt chi_eff and RHS c*sqrt(max(0, 1 - S_eff)).
+  Here S_eff is computed on the coarse lattice with the SAME definition (nearest neighbors),
+  using the same (K0, chi_c, c), purely as a consistency check of the effective PDE.
+  """
+  dchi_eff_dt = (chi_eff_curr - chi_eff_prev) / dt
+
+  S_eff = S_local(chi_eff_curr, K0=K0, chi_c=chi_c, c=c)
+  rhs = c * np.sqrt(np.clip(1.0 - S_eff, 0.0, None))
+
+  res = dchi_eff_dt - rhs
+
+  l2_res = float(np.sqrt(np.mean(res ** 2)))
+  l2_lhs = float(np.sqrt(np.mean(dchi_eff_dt ** 2)))
+  eps_l2 = l2_res / (l2_lhs + 1e-12)
+
+  l_inf_res = float(np.max(np.abs(res)))
+  l_inf_lhs = float(np.max(np.abs(dchi_eff_dt)))
+  eps_inf = l_inf_res / (l_inf_lhs + 1e-12)
+
+  return eps_l2, eps_inf, res, dchi_eff_dt, rhs
+
+
+def run_case(case_name: str, smooth_init: bool):
+  rng = np.random.default_rng(seed)
+
+  # Initial condition
+  chi = rng.normal(0.0, 0.2, size=(N, N, N)).astype(np.float64)
+
+  # Optional pre-smoothing to reach a projectable regime
+  if smooth_init:
+    for _ in range(10):
+      chi = chi + 0.2 * laplacian(chi)
+
+  eps_t = []
+  epsinf_t = []
+
+  # We'll compute epsilon(t) from consecutive chi_eff snapshots
+  chi_eff_prev = None
+
+  # Store final diagnostics for figures
+  final_res = None
+  final_chi_eff = None
+
+  for t in range(steps):
+    chi = evolve(chi, dt=dt, c=c, kappa=kappa, K0=K0, chi_c=chi_c)
+
+    chi_eff_curr = coarse_grain_block(chi, block)
+
+    if chi_eff_prev is not None:
+      eps_l2, eps_inf, res, _, _ = compute_epsilon(
+        chi_eff_prev, chi_eff_curr, dt=dt, c=c, K0=K0, chi_c=chi_c
+      )
+      eps_t.append(eps_l2)
+      epsinf_t.append(eps_inf)
+
+      final_res = res
+      final_chi_eff = chi_eff_curr
+
+    chi_eff_prev = chi_eff_curr
+
+  # Print summary
+  print(f"\n=== {case_name} ===")
+  print(f"Micro grid: {N}^3, steps={steps}, dt={dt}, block={block}, seed={seed}")
+  print(f"chi_eff grid: {final_chi_eff.shape}")
+  print(f"Final epsilon L2 : {eps_t[-1]:.12g}")
+  print(f"Final epsilon Linf: {epsinf_t[-1]:.12g}")
+
+  # --- Figures ---
+  # 1) epsilon(t)
+  import matplotlib.pyplot as plt
+  plt.figure()
+  plt.plot(np.arange(1, len(eps_t) + 1) * dt, eps_t)
+  plt.title(f"Epsilon vs time ({case_name})")
+  plt.xlabel("time")
+  plt.ylabel("epsilon (relative L2 residual)")
+  plt.tight_layout()
+  p = OUTDIR / f"fig_D4_epsilon_vs_time_{case_name}.{SAVE_FMT}"
+  plt.savefig(p, dpi=DPI if SAVE_FMT == "png" else None)
+  plt.close()
+
+  # 2) residual histogram (final)
+  plt.figure()
+  plt.hist(final_res.ravel(), bins=60)
+  plt.title(f"Residual histogram ({case_name})")
+  plt.xlabel("Residual value")
+  plt.ylabel("Count")
+  plt.tight_layout()
+  p = OUTDIR / f"fig_D4_residual_hist_{case_name}.{SAVE_FMT}"
+  plt.savefig(p, dpi=DPI if SAVE_FMT == "png" else None)
+  plt.close()
+
+  # 3) slices (final)
+  mid = final_chi_eff.shape[2] // 2
+
+  plt.figure()
+  plt.imshow(final_chi_eff[:, :, mid], origin="lower")
+  plt.title(f"chi_eff slice (mid z) ({case_name})")
+  plt.colorbar()
+  plt.tight_layout()
+  p = OUTDIR / f"fig_D4_chi_eff_slice_{case_name}.{SAVE_FMT}"
+  plt.savefig(p, dpi=DPI if SAVE_FMT == "png" else None)
+  plt.close()
+
+  plt.figure()
+  plt.imshow(final_res[:, :, mid], origin="lower")
+  plt.title(f"Residual slice (mid z) ({case_name})")
+  plt.colorbar()
+  plt.tight_layout()
+  p = OUTDIR / f"fig_D4_residual_slice_{case_name}.{SAVE_FMT}"
+  plt.savefig(p, dpi=DPI if SAVE_FMT == "png" else None)
+  plt.close()
+
+  return eps_t, epsinf_t
+
+
 # -----------------------
 # Main
 # -----------------------
 def main() -> None:
-    rng = np.random.default_rng(seed)
+  eps_smooth, epsinf_smooth = run_case("smooth", smooth_init=True)
 
-    # Initial condition: random field, then pre-smoothed to be "projectable-ish"
-    chi = rng.normal(0.0, 0.2, size=(N, N, N)).astype(np.float64)
+  if DO_FAILURE_MODE:
+    eps_rough, epsinf_rough = run_case("rough", smooth_init=False)
 
-    # Pre-smooth (helps keep sqrt radicand positive and produces smoother chi_eff)
-    for _ in range(10):
-        chi = chi + 0.2 * laplacian(chi)
-
-    # Evolve and store last two chi_eff snapshots for time derivative
-    chi_eff_prev = None
-    chi_eff_curr = None
-
-    for t in range(steps):
-        chi = evolve(chi, dt=dt, c=c, kappa=kappa)
-
-        if t == steps - 2:
-            chi_eff_prev = coarse_grain_block(chi, block)
-        if t == steps - 1:
-            chi_eff_curr = coarse_grain_block(chi, block)
-
-    assert chi_eff_prev is not None and chi_eff_curr is not None
-
-    # LHS: discrete time derivative of chi_eff
-    dchi_eff_dt = (chi_eff_curr - chi_eff_prev) / dt
-
-    # RHS: PDE source term computed on chi_eff
-    g2_eff = grad_sq(chi_eff_curr)
-    rad_eff = np.clip(1.0 - g2_eff / (c * c), 0.0, None)
-    rhs_eff = c * np.sqrt(rad_eff)
-
-    # Residual
-    res = dchi_eff_dt - rhs_eff
-
-    # Metrics
-    l2_res = float(np.sqrt(np.mean(res ** 2)))
-    l2_lhs = float(np.sqrt(np.mean(dchi_eff_dt ** 2)))
-    rel_l2 = l2_res / (l2_lhs + 1e-12)
-
-    l_inf_res = float(np.max(np.abs(res)))
-    l_inf_lhs = float(np.max(np.abs(dchi_eff_dt)))
-    rel_linf = l_inf_res / (l_inf_lhs + 1e-12)
-
-    # Print results (these are the quoted numbers)
-    print("=== Toy validation: chi -> chi_eff PDE residual ===")
-    print(f"Micro grid: {N}^3, steps={steps}, dt={dt}, block={block}, seed={seed}")
-    print(f"chi_eff grid: {chi_eff_curr.shape}")
-    print(f"Relative L2 residual  : {rel_l2:.12g}")
-    print(f"Relative Linf residual: {rel_linf:.12g}")
-    print(f"Absolute L2 residual  : {l2_res:.12g}")
-    print(f"Absolute L2 lhs scale : {l2_lhs:.12g}")
-
-    # Plots
-    mid = chi_eff_curr.shape[2] // 2
-
-    # --- Plots (and export to files) ---
-    mid = chi_eff_curr.shape[2] // 2
-
-    # 1) Histogram of residuals
+    # Optional: combined plot smooth vs rough
+    import matplotlib.pyplot as plt
     plt.figure()
-    plt.hist(res.ravel(), bins=60)
-    plt.title("Residual: d/dt chi_eff - c*sqrt(1 - |grad chi_eff|^2/c^2)")
-    plt.xlabel("Residual value")
-    plt.ylabel("Count")
+    t_s = np.arange(1, len(eps_smooth) + 1) * dt
+    t_r = np.arange(1, len(eps_rough) + 1) * dt
+    plt.plot(t_s, eps_smooth, label="smooth")
+    plt.plot(t_r, eps_rough, label="rough")
+    plt.title("Epsilon vs time (smooth vs rough)")
+    plt.xlabel("time")
+    plt.ylabel("epsilon (relative L2 residual)")
+    plt.legend()
     plt.tight_layout()
-
-    hist_path = OUTDIR / f"fig_D4_residual_hist.{SAVE_FMT}"
-    plt.savefig(hist_path, dpi=DPI if SAVE_FMT == "png" else None)
+    p = OUTDIR / f"fig_D4_epsilon_vs_time_compare.{SAVE_FMT}"
+    plt.savefig(p, dpi=DPI if SAVE_FMT == "png" else None)
     plt.close()
 
-    # 2) Slice view of chi_eff at z mid-plane
-    plt.figure()
-    plt.imshow(chi_eff_curr[:, :, mid], origin="lower")
-    plt.title("chi_eff slice (mid z)")
-    plt.colorbar()
-    plt.tight_layout()
+  print(f"\nSaved figures to: {OUTDIR.resolve()}")
 
-    chi_slice_path = OUTDIR / f"fig_D4_chi_eff_slice.{SAVE_FMT}"
-    plt.savefig(chi_slice_path, dpi=DPI if SAVE_FMT == "png" else None)
-    plt.close()
-
-    # 3) Slice view of residual at z mid-plane
-    plt.figure()
-    plt.imshow(res[:, :, mid], origin="lower")
-    plt.title("Residual slice (mid z)")
-    plt.colorbar()
-    plt.tight_layout()
-
-    res_slice_path = OUTDIR / f"fig_D4_residual_slice.{SAVE_FMT}"
-    plt.savefig(res_slice_path, dpi=DPI if SAVE_FMT == "png" else None)
-    plt.close()
-
-    print(f"Saved figures to: {OUTDIR.resolve()}")
-    print(" -", hist_path)
-    print(" -", chi_slice_path)
-    print(" -", res_slice_path)
 
 if __name__ == "__main__":
     main()
