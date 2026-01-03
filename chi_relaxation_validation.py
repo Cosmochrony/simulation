@@ -18,6 +18,14 @@ Notes:
 import numpy as np
 import matplotlib.pyplot as plt
 
+from pathlib import Path
+
+OUTDIR = Path("figures")
+OUTDIR.mkdir(parents=True, exist_ok=True)
+
+SAVE_FMT = "pdf"   # "pdf" recommandé pour LaTeX, sinon "png"
+DPI = 200          # utile si SAVE_FMT="png"
+
 
 # -----------------------
 # Parameters (reproducible)
