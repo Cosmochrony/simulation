@@ -116,8 +116,13 @@ def compute_epsilon(chi_eff_prev, chi_eff_curr, dt: float, c: float, K0: float, 
   """
   dchi_eff_dt = (chi_eff_curr - chi_eff_prev) / dt
 
+  # RHS must match the evolution rule (include diffusion term)
   S_eff = S_local(chi_eff_curr, K0=K0, chi_c=chi_c, c=c)
   rhs = c * np.sqrt(np.clip(1.0 - S_eff, 0.0, None))
+
+  # IMPORTANT: include diffusion on chi_eff too
+  kappa_eff = kappa / (block * block)  # recommended scaling; start with this
+  rhs = rhs + kappa_eff * laplacian(chi_eff_curr)
 
   res = dchi_eff_dt - rhs
 
