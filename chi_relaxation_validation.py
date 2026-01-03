@@ -145,6 +145,10 @@ def main() -> None:
     # Plots
     mid = chi_eff_curr.shape[2] // 2
 
+    # --- Plots (and export to files) ---
+    mid = chi_eff_curr.shape[2] // 2
+
+    # 1) Histogram of residuals
     plt.figure()
     plt.hist(res.ravel(), bins=60)
     plt.title("Residual: d/dt chi_eff - c*sqrt(1 - |grad chi_eff|^2/c^2)")
@@ -152,20 +156,36 @@ def main() -> None:
     plt.ylabel("Count")
     plt.tight_layout()
 
+    hist_path = OUTDIR / f"fig_D4_residual_hist.{SAVE_FMT}"
+    plt.savefig(hist_path, dpi=DPI if SAVE_FMT == "png" else None)
+    plt.close()
+
+    # 2) Slice view of chi_eff at z mid-plane
     plt.figure()
     plt.imshow(chi_eff_curr[:, :, mid], origin="lower")
     plt.title("chi_eff slice (mid z)")
     plt.colorbar()
     plt.tight_layout()
 
+    chi_slice_path = OUTDIR / f"fig_D4_chi_eff_slice.{SAVE_FMT}"
+    plt.savefig(chi_slice_path, dpi=DPI if SAVE_FMT == "png" else None)
+    plt.close()
+
+    # 3) Slice view of residual at z mid-plane
     plt.figure()
     plt.imshow(res[:, :, mid], origin="lower")
     plt.title("Residual slice (mid z)")
     plt.colorbar()
     plt.tight_layout()
 
-    plt.show()
+    res_slice_path = OUTDIR / f"fig_D4_residual_slice.{SAVE_FMT}"
+    plt.savefig(res_slice_path, dpi=DPI if SAVE_FMT == "png" else None)
+    plt.close()
 
+    print(f"Saved figures to: {OUTDIR.resolve()}")
+    print(" -", hist_path)
+    print(" -", chi_slice_path)
+    print(" -", res_slice_path)
 
 if __name__ == "__main__":
     main()
