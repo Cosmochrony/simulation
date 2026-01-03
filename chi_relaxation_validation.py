@@ -108,23 +108,15 @@ def coarse_grain_block(u: np.ndarray, b: int) -> np.ndarray:
     return u.reshape(n, b, n, b, n, b).mean(axis=(1, 3, 5))
 
 
-def compute_epsilon(chi_eff_prev, chi_eff_curr, dt: float, c: float, K0: float, chi_c: float):
-  """
-  Compute epsilon between LHS d/dt chi_eff and RHS c*sqrt(max(0, 1 - S_eff)).
-  Here S_eff is computed on the coarse lattice with the SAME definition (nearest neighbors),
-  using the same (K0, chi_c, c), purely as a consistency check of the effective PDE.
-  """
+def rhs_micro(u: np.ndarray, c: float, kappa: float, K0: float, chi_c: float) -> np.ndarray:
+  S = S_local(u, K0=K0, chi_c=chi_c, c=c)
+  R = c * np.sqrt(np.clip(1.0 - S, 0.0, None))
+  return R + kappa * laplacian(u)
+
+
+def compute_epsilon_from_rhs_eff(chi_eff_prev, chi_eff_curr, rhs_eff, dt: float):
   dchi_eff_dt = (chi_eff_curr - chi_eff_prev) / dt
-
-  # RHS must match the evolution rule (include diffusion term)
-  S_eff = S_local(chi_eff_curr, K0=K0, chi_c=chi_c, c=c)
-  rhs = c * np.sqrt(np.clip(1.0 - S_eff, 0.0, None))
-
-  # IMPORTANT: include diffusion on chi_eff too
-  kappa_eff = kappa / (block * block)  # recommended scaling; start with this
-  rhs = rhs + kappa_eff * laplacian(chi_eff_curr)
-
-  res = dchi_eff_dt - rhs
+  res = dchi_eff_dt - rhs_eff
 
   l2_res = float(np.sqrt(np.mean(res ** 2)))
   l2_lhs = float(np.sqrt(np.mean(dchi_eff_dt ** 2)))
@@ -134,7 +126,7 @@ def compute_epsilon(chi_eff_prev, chi_eff_curr, dt: float, c: float, K0: float, 
   l_inf_lhs = float(np.max(np.abs(dchi_eff_dt)))
   eps_inf = l_inf_res / (l_inf_lhs + 1e-12)
 
-  return eps_l2, eps_inf, res, dchi_eff_dt, rhs
+  return eps_l2, eps_inf, res
 
 
 def run_case(case_name: str, smooth_init: bool):
@@ -161,11 +153,14 @@ def run_case(case_name: str, smooth_init: bool):
   for t in range(steps):
     chi = evolve(chi, dt=dt, c=c, kappa=kappa, K0=K0, chi_c=chi_c)
 
+    rhs_curr_micro = rhs_micro(chi, c=c, kappa=kappa, K0=K0, chi_c=chi_c)
+    rhs_curr_eff = coarse_grain_block(rhs_curr_micro, block)
+
     chi_eff_curr = coarse_grain_block(chi, block)
 
     if chi_eff_prev is not None:
-      eps_l2, eps_inf, res, _, _ = compute_epsilon(
-        chi_eff_prev, chi_eff_curr, dt=dt, c=c, K0=K0, chi_c=chi_c
+      eps_l2, eps_inf, res = compute_epsilon_from_rhs_eff(
+        chi_eff_prev, chi_eff_curr, rhs_eff=rhs_curr_eff, dt=dt
       )
       eps_t.append(eps_l2)
       epsinf_t.append(eps_inf)
