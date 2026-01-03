@@ -387,6 +387,23 @@ def main() -> None:
   print(f"\nSaved figures to: {outdir.resolve()}")
   print(f" - {p}")
 
+  # --- Combined comparison plot: saturation fraction ---
+  plt.figure()
+  for r in results:
+      t_axis = np.arange(len(r["sat_frac_t"])) * args.dt
+      plt.plot(t_axis, r["sat_frac_t"], label=r["name"])
+  plt.title("Saturation fraction vs time (comparison)")
+  plt.xlabel("time")
+  plt.ylabel("fraction of nodes with S > 1")
+  plt.ylim(-0.05, 1.05)
+  plt.legend()
+  plt.tight_layout()
+  p = outdir / f"fig_D4_saturation_fraction_compare.{args.save_fmt}"
+  plt.savefig(p, dpi=args.dpi if args.save_fmt == "png" else None)
+  plt.close()
+
+  print(f" - {p}")
+
 
 if __name__ == "__main__":
   main()
