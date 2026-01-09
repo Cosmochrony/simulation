@@ -180,7 +180,15 @@ def spectral_ratio_once(
     A0.eliminate_zeros()
     A0 = symmetrize_max(A0)
 
-    mu = np.exp(alpha * (X[:, 0] ** 2))
+    x2 = X[:, 0] ** 2
+    xc2 = 0.25
+
+    if alpha <= 0.0:
+      mu = np.ones_like(x2)
+    else:
+      mu = np.exp(alpha * np.maximum(0.0, x2 - xc2))
+    print(f"[debug] alpha={alpha:+.2f} mu: min={mu.min():.4f} max={mu.max():.4f} mean={mu.mean():.4f}")
+
     s = mu ** gamma
     S = sparse.diags(s)
 
@@ -200,7 +208,7 @@ def spectral_ratio_once(
 
 def spectral_curve(
     alphas,
-    N_points=1500, k_nn=14,
+    N_points=2500, k_nn=14,
     repeats=6, seed=1,
     gamma=0.5, sigma_scale=1.0,
     n_eigs=18, n_modes_avg=6,
@@ -256,13 +264,13 @@ def main():
     mc_repeats = 10
 
     # --- Spectral settings
-    N_points = 1500
+    N_points = 2500
     k_nn = 14
     spec_repeats = 6
 
     # Tunable knobs to better match the MC curve shape
-    gamma = 0.5       # try 0.8 or 1.0 for stronger alpha>0 amplification
-    sigma_scale = 1.0 # try 0.7 for more locality / stronger density effects
+    gamma = 2.4       # try 0.8 or 1.0 for stronger alpha>0 amplification
+    sigma_scale = 0.7 # try 0.7 for more locality / stronger density effects
 
     # Compute curves
     R_mc, CI_mc = mc_curve(alphas, n_samples=mc_n_samples, repeats=mc_repeats, seed=0)
