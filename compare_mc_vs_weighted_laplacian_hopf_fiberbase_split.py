@@ -12,9 +12,9 @@ CRITICAL FIX:
   weighted-kernel ("spectral") branch. This removes the structural mismatch
   that occurs when MC uses global pairs while the spectral branch uses local kNN edges.
 
-Output:
-  - Curve R(alpha) = E_fiber(alpha) / E_base(alpha)
-  - Optional plot of energies E_fiber and E_base for both branches.
+Observable:
+  R(alpha) = E_fiber(alpha) / E_base(alpha)
+where energies are kernel-weighted averages over the chosen kNN edge support.
 
 Dependencies:
   numpy, scipy, matplotlib
@@ -32,7 +32,6 @@ from typing import Tuple, Dict, List
 
 import numpy as np
 import matplotlib.pyplot as plt
-
 from scipy.spatial import cKDTree
 
 
@@ -47,6 +46,11 @@ def sample_s3(n: int, rng: np.random.Generator) -> np.ndarray:
     return x
 
 
+def wrap_angle(theta: np.ndarray) -> np.ndarray:
+    """Wrap angles to [-pi, pi]."""
+    return (theta + np.pi) % (2.0 * np.pi) - np.pi
+
+
 def hopf_map_s3_to_s2(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Hopf map using complex coords:
@@ -58,7 +62,7 @@ def hopf_map_s3_to_s2(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
       Y = 2 Im(z1 * conj(z2))
       Z = |z1|^2 - |z2|^2
 
-    Fiber angle (a convenient choice):
+    Fiber angle (one convenient gauge choice):
       phi = arg(z1) - arg(z2)  (wrapped to [-pi, pi])
     """
     x0, x1, x2, x3 = x[:, 0], x[:, 1], x[:, 2], x[:, 3]
@@ -70,19 +74,10 @@ def hopf_map_s3_to_s2(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     base_z = (np.abs(z1) ** 2) - (np.abs(z2) ** 2)
 
     base = np.stack([base_x, base_y, base_z], axis=1)
-    # Numerical safety (should already be on S^2)
     base /= np.linalg.norm(base, axis=1, keepdims=True)
 
-    arg1 = np.angle(z1)
-    arg2 = np.angle(z2)
-    phi = wrap_angle(arg1 - arg2)
-
+    phi = wrap_angle(np.angle(z1) - np.angle(z2))
     return base, phi
-
-
-def wrap_angle(theta: np.ndarray) -> np.ndarray:
-    """Wrap angles to [-pi, pi]."""
-    return (theta + np.pi) % (2.0 * np.pi) - np.pi
 
 
 def s2_chordal_dist2(u: np.ndarray, v: np.ndarray) -> np.ndarray:
@@ -117,26 +112,21 @@ def knn_edges(points: np.ndarray, k: int) -> np.ndarray:
     """
     n = points.shape[0]
     tree = cKDTree(points)
-    # query k+1 because the nearest neighbor is itself at distance 0
-    dists, idxs = tree.query(points, k=k + 1)
+    _, idxs = tree.query(points, k=k + 1)  # includes self at 0
     idxs = idxs[:, 1:]  # drop self
-
     i = np.repeat(np.arange(n), k)
     j = idxs.reshape(-1)
     return np.stack([i, j], axis=1)
 
 
 def make_undirected_unique_edges(edges_ij: np.ndarray) -> np.ndarray:
-    """
-    Convert directed edges to undirected unique edges (i<j).
-    """
+    """Convert directed edges to undirected unique edges (i<j)."""
     i = edges_ij[:, 0]
     j = edges_ij[:, 1]
     a = np.minimum(i, j)
     b = np.maximum(i, j)
     und = np.stack([a, b], axis=1)
     und = np.unique(und, axis=0)
-    # Remove self-loops if any (should not happen)
     und = und[und[:, 0] != und[:, 1]]
     return und
 
@@ -146,19 +136,13 @@ def make_undirected_unique_edges(edges_ij: np.ndarray) -> np.ndarray:
 # -----------------------------
 
 def a_from_alpha(alpha: float) -> float:
-    """
-    Coupling factor a(alpha) used in your previous logs:
-      a(alpha) = exp(-max(alpha, 0))
-    So:
-      alpha <= 0 -> a = 1
-      alpha > 0  -> a decreases
-    """
+    """a(alpha) = exp(-max(alpha,0))"""
     return float(math.exp(-max(alpha, 0.0)))
 
 
 def anisotropic_kernel(d_base2: np.ndarray, d_fiber2: np.ndarray, alpha: float, sigma: float) -> np.ndarray:
     """
-    Kernel K_alpha(i,j) = exp(-(d_base^2 + a(alpha) * d_fiber^2) / (2 sigma^2))
+    K_alpha = exp(-(d_base^2 + a(alpha)*d_fiber^2) / (2*sigma^2))
     """
     a = a_from_alpha(alpha)
     denom = 2.0 * (sigma ** 2)
@@ -173,13 +157,10 @@ def spectral_energy_on_edges(
     sigma: float,
 ) -> Tuple[float, float, float]:
     """
-    "Spectral" branch energies: mean distances over the SAME edge set,
-    weighted by the kernel (this matches the quantity your Laplacian-kernel
-    construction implicitly encodes).
-
-      E_base = sum_e w_e * d_base^2 / sum_e w_e
-      E_fiber = sum_e w_e * d_fiber^2 / sum_e w_e
-      R = E_fiber / E_base
+    Full-edge "spectral" estimator (kernel-weighted):
+      E_base  = sum w d_base^2  / sum w
+      E_fiber = sum w d_fiber^2 / sum w
+      R       = E_fiber / E_base
     """
     i = edges_und[:, 0]
     j = edges_und[:, 1]
@@ -190,6 +171,7 @@ def spectral_energy_on_edges(
     wsum = float(np.sum(w))
     if wsum <= 0.0:
         raise RuntimeError("Sum of kernel weights is zero. Increase sigma or check kernel.")
+
     e_base = float(np.sum(w * d_base2) / wsum)
     e_fiber = float(np.sum(w * d_fiber2) / wsum)
     r = e_fiber / max(e_base, 1e-15)
@@ -206,15 +188,7 @@ def mc_energy_on_same_edges(
     n_edge_samples: int,
 ) -> Tuple[float, float, float]:
     """
-    Monte-Carlo branch on the SAME edge support.
-
-    We sample edges uniformly from the undirected edge list, and use
-    importance weighting with the same kernel weights w_e:
-
-      E_base = sum_s w_s * d_base^2 / sum_s w_s
-      E_fiber = sum_s w_s * d_fiber^2 / sum_s w_s
-
-    This is the "fixed" MC that is now directly comparable to the spectral branch.
+    Monte-Carlo estimator on SAME edge support (sample edges uniformly, then apply same weighting).
     """
     m = edges_und.shape[0]
     idx = rng.integers(0, m, size=n_edge_samples)
@@ -228,6 +202,7 @@ def mc_energy_on_same_edges(
     wsum = float(np.sum(w))
     if wsum <= 0.0:
         raise RuntimeError("Sum of MC weights is zero. Increase sigma or check kernel.")
+
     e_base = float(np.sum(w * d_base2) / wsum)
     e_fiber = float(np.sum(w * d_fiber2) / wsum)
     r = e_fiber / max(e_base, 1e-15)
@@ -239,9 +214,7 @@ def mc_energy_on_same_edges(
 # -----------------------------
 
 def mean_ci95(values: np.ndarray) -> Tuple[float, float]:
-    """
-    Mean and approximate 95% CI (normal approx) for repeated estimates.
-    """
+    """Mean and ~95% CI (normal approximation) for repeated estimates."""
     v = np.asarray(values, dtype=float)
     mu = float(np.mean(v))
     if len(v) <= 1:
@@ -255,19 +228,23 @@ def mean_ci95(values: np.ndarray) -> Tuple[float, float]:
 class CurvePoint:
     alpha: float
     a: float
+
     mc_r: float
-    mc_ci: float
+    mc_r_ci: float
     spec_r: float
-    spec_ci: float
-    # energies (optional)
+    spec_r_ci: float
+
     mc_e_fiber: float
     mc_e_fiber_ci: float
     mc_e_base: float
     mc_e_base_ci: float
+
     spec_e_fiber: float
     spec_e_fiber_ci: float
     spec_e_base: float
     spec_e_base_ci: float
+
+    m_edges_mean: float
 
 
 # -----------------------------
@@ -282,14 +259,6 @@ def run_one_repeat(
     rng: np.random.Generator,
     mc_edge_samples: int,
 ) -> Dict[str, float]:
-    """
-    One repeat:
-      - sample S^3 points
-      - build Hopf base + fiber angle
-      - build kNN edges and undirected unique set
-      - compute MC-on-edges energies & ratio
-      - compute spectral energies & ratio on full edge set
-    """
     s3 = sample_s3(n_points, rng)
     base, phi = hopf_map_s3_to_s2(s3)
 
@@ -331,20 +300,18 @@ def run_curve(
     print()
 
     for alpha in alphas:
-        # collect repeats
         mc_rs, sp_rs = [], []
         mc_ef, mc_eb = [], []
         sp_ef, sp_eb = [], []
+        m_edges_list = []
 
-        # independent RNG stream per alpha for reproducibility
         alpha_seed = int(rng_master.integers(0, 2**31 - 1))
         rng_alpha = np.random.default_rng(alpha_seed)
-
-        m_edges_list = []
 
         for _ in range(repeats):
             rep_seed = int(rng_alpha.integers(0, 2**31 - 1))
             rng = np.random.default_rng(rep_seed)
+
             out = run_one_repeat(
                 n_points=n_points,
                 k_nn=k_nn,
@@ -370,12 +337,13 @@ def run_curve(
         sp_eb_mu, sp_eb_ci = mean_ci95(np.array(sp_eb))
 
         a = a_from_alpha(float(alpha))
+        m_edges_mean = float(np.mean(m_edges_list))
 
         print(
             f"alpha={alpha:+.2f}  a(exp(-max(alpha,0)))={a:.4f} | "
             f"MC ratio={mc_r_mu:.6f}  95%CI=±{mc_r_ci:.6f} | "
             f"Spec ratio={sp_r_mu:.6f}  95%CI=±{sp_r_ci:.6f} | "
-            f"edges≈{np.mean(m_edges_list):.0f}"
+            f"edges≈{m_edges_mean:.0f}"
         )
 
         curve.append(
@@ -383,9 +351,9 @@ def run_curve(
                 alpha=float(alpha),
                 a=a,
                 mc_r=mc_r_mu,
-                mc_ci=mc_r_ci,
+                mc_r_ci=mc_r_ci,
                 spec_r=sp_r_mu,
-                spec_ci=sp_r_ci,
+                spec_r_ci=sp_r_ci,
                 mc_e_fiber=mc_ef_mu,
                 mc_e_fiber_ci=mc_ef_ci,
                 mc_e_base=mc_eb_mu,
@@ -394,6 +362,7 @@ def run_curve(
                 spec_e_fiber_ci=sp_ef_ci,
                 spec_e_base=sp_eb_mu,
                 spec_e_base_ci=sp_eb_ci,
+                m_edges_mean=m_edges_mean,
             )
         )
 
@@ -405,64 +374,64 @@ def run_curve(
 # -----------------------------
 
 def plot_curve(curve: List[CurvePoint], sigma: float, k_nn: int, show_energies: bool):
-  alphas = np.array([p.alpha for p in curve])
+    alphas = np.array([p.alpha for p in curve])
 
-  # Ratio plot
-  mc = np.array([p.mc_r for p in curve])
-  mc_ci = np.array([p.mc_ci for p in curve])
-  sp = np.array([p.spec_r for p in curve])
-  sp_ci = np.array([p.spec_ci for p in curve])
+    mc = np.array([p.mc_r for p in curve])
+    mc_ci = np.array([p.mc_r_ci for p in curve])
+    sp = np.array([p.spec_r for p in curve])
+    sp_ci = np.array([p.spec_r_ci for p in curve])
 
-  if show_energies:
-    fig = plt.figure(figsize=(11.5, 7.5), constrained_layout=True)
-    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1])
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[1, 0])
-  else:
-    fig, ax1 = plt.subplots(figsize=(11.5, 5.5), constrained_layout=True)
-    ax2 = None
+    if show_energies:
+        fig = plt.figure(figsize=(11.5, 7.5), constrained_layout=True)
+        gs = fig.add_gridspec(2, 1, height_ratios=[1, 1])
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[1, 0])
+    else:
+        fig, ax1 = plt.subplots(figsize=(11.5, 5.5), constrained_layout=True)
+        ax2 = None
 
-  # Reference at alpha=0 (empirical baseline)
-  r0 = sp[np.argmin(np.abs(alphas - 0.0))]
-  ax1.axhline(r0, linestyle="--", label=f"Reference at α=0  (R≈{r0:.3f})")
+    # Reference at alpha=0 (empirical baseline)
+    r0 = sp[np.argmin(np.abs(alphas - 0.0))]
+    ax1.axhline(r0, linestyle="--", label=f"Reference at α=0  (R≈{r0:.3f})")
 
-  ax1.errorbar(
-    alphas, mc, yerr=mc_ci, marker="o", capsize=4,
-    label="Monte-Carlo (on kNN edges) — Hopf fiber/base"
-  )
-  ax1.errorbar(
-    alphas, sp, yerr=sp_ci, marker="o", capsize=4,
-    label=f"Spectral (kernel on kNN edges) — Hopf fiber/base  [k={k_nn}, sigma={sigma}]"
-  )
+    ax1.errorbar(
+        alphas, mc, yerr=mc_ci, marker="o", capsize=4,
+        label="Monte-Carlo (on kNN edges) — Hopf fiber/base"
+    )
+    ax1.errorbar(
+        alphas, sp, yerr=sp_ci, marker="o", capsize=4,
+        label=f"Spectral (kernel on kNN edges) — Hopf fiber/base  [k={k_nn}, sigma={sigma}]"
+    )
 
-  ax1.set_title("Monte-Carlo vs Spectral response on S³ (Hopf fibration S¹→S³→S²)")
-  ax1.set_xlabel("Relaxation bias α")
-  ax1.set_ylabel("Fiber/Base ratio  R(α) = E_fiber / E_base")
-  ax1.grid(True, alpha=0.3)
-  ax1.legend(loc="best")
+    ax1.set_title("Monte-Carlo vs Spectral response on S³ (Hopf fibration S¹→S³→S²)")
+    ax1.set_xlabel("Relaxation bias α")
+    ax1.set_ylabel("Fiber/Base ratio  R(α) = E_fiber / E_base")
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(loc="best")
 
-  if show_energies and ax2 is not None:
-    mc_ef = np.array([p.mc_e_fiber for p in curve])
-    mc_ef_ci = np.array([p.mc_e_fiber_ci for p in curve])
-    mc_eb = np.array([p.mc_e_base for p in curve])
-    mc_eb_ci = np.array([p.mc_e_base_ci for p in curve])
+    if show_energies and ax2 is not None:
+        mc_ef = np.array([p.mc_e_fiber for p in curve])
+        mc_ef_ci = np.array([p.mc_e_fiber_ci for p in curve])
+        mc_eb = np.array([p.mc_e_base for p in curve])
+        mc_eb_ci = np.array([p.mc_e_base_ci for p in curve])
 
-    sp_ef = np.array([p.spec_e_fiber for p in curve])
-    sp_ef_ci = np.array([p.spec_e_fiber_ci for p in curve])
-    sp_eb = np.array([p.spec_e_base for p in curve])
-    sp_eb_ci = np.array([p.spec_e_base_ci for p in curve])
+        sp_ef = np.array([p.spec_e_fiber for p in curve])
+        sp_ef_ci = np.array([p.spec_e_fiber_ci for p in curve])
+        sp_eb = np.array([p.spec_e_base for p in curve])
+        sp_eb_ci = np.array([p.spec_e_base_ci for p in curve])
 
-    ax2.errorbar(alphas, mc_ef, yerr=mc_ef_ci, marker="o", capsize=4, label="MC  E_fiber")
-    ax2.errorbar(alphas, mc_eb, yerr=mc_eb_ci, marker="o", capsize=4, label="MC  E_base")
-    ax2.errorbar(alphas, sp_ef, yerr=sp_ef_ci, marker="o", capsize=4, label="Spec  E_fiber")
-    ax2.errorbar(alphas, sp_eb, yerr=sp_eb_ci, marker="o", capsize=4, label="Spec  E_base")
+        ax2.errorbar(alphas, mc_ef, yerr=mc_ef_ci, marker="o", capsize=4, label="MC  E_fiber")
+        ax2.errorbar(alphas, mc_eb, yerr=mc_eb_ci, marker="o", capsize=4, label="MC  E_base")
+        ax2.errorbar(alphas, sp_ef, yerr=sp_ef_ci, marker="o", capsize=4, label="Spec  E_fiber")
+        ax2.errorbar(alphas, sp_eb, yerr=sp_eb_ci, marker="o", capsize=4, label="Spec  E_base")
 
-    ax2.set_xlabel("Relaxation bias α")
-    ax2.set_ylabel("Kernel-weighted energies")
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(loc="best")
+        ax2.set_xlabel("Relaxation bias α")
+        ax2.set_ylabel("Kernel-weighted energies")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc="best")
 
-  plt.show()
+    plt.show()
+
 
 # -----------------------------
 # CLI
@@ -487,7 +456,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    # alpha grid
+
     n_steps = int(round((args.alpha_max - args.alpha_min) / args.alpha_step)) + 1
     alphas = np.linspace(args.alpha_min, args.alpha_max, n_steps)
 
