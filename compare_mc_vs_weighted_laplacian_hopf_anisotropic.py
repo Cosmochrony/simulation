@@ -132,7 +132,8 @@ def anisotropic_kernel_weights(
         d2_alpha = d_perp^2 + exp(-alpha) * d_par^2
     alpha>0 => fiber component is less penalized => fiber-aligned edges get more weight.
     """
-    d2a = d_perp2 + np.exp(-alpha) * d_par2
+    alpha_pos = max(0.0, float(alpha))
+    d2a = d_perp2 + np.exp(-alpha_pos) * d_par2
     return np.exp(-d2a / (2.0 * sigma2))
 
 
