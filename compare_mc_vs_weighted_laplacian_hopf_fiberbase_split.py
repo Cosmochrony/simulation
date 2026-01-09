@@ -405,58 +405,64 @@ def run_curve(
 # -----------------------------
 
 def plot_curve(curve: List[CurvePoint], sigma: float, k_nn: int, show_energies: bool):
-    alphas = np.array([p.alpha for p in curve])
+  alphas = np.array([p.alpha for p in curve])
 
-    # Ratio plot
-    mc = np.array([p.mc_r for p in curve])
-    mc_ci = np.array([p.mc_ci for p in curve])
-    sp = np.array([p.spec_r for p in curve])
-    sp_ci = np.array([p.spec_ci for p in curve])
+  # Ratio plot
+  mc = np.array([p.mc_r for p in curve])
+  mc_ci = np.array([p.mc_ci for p in curve])
+  sp = np.array([p.spec_r for p in curve])
+  sp_ci = np.array([p.spec_ci for p in curve])
 
-    if show_energies:
-        fig = plt.figure(figsize=(11.5, 7.5))
-        gs = fig.add_gridspec(2, 1, height_ratios=[1, 1], hspace=0.25)
-        ax1 = fig.add_subplot(gs[0, 0])
-        ax2 = fig.add_subplot(gs[1, 0])
-    else:
-        fig, ax1 = plt.subplots(figsize=(11.5, 5.5))
-        ax2 = None
+  if show_energies:
+    fig = plt.figure(figsize=(11.5, 7.5), constrained_layout=True)
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1])
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[1, 0])
+  else:
+    fig, ax1 = plt.subplots(figsize=(11.5, 5.5), constrained_layout=True)
+    ax2 = None
 
-    ax1.axhline(8.0 / 3.0, linestyle="--", label="Theoretical target (8/3)")
-    ax1.errorbar(alphas, mc, yerr=mc_ci, marker="o", capsize=4,
-                 label="Monte-Carlo (on kNN edges) — Hopf fiber/base")
-    ax1.errorbar(alphas, sp, yerr=sp_ci, marker="o", capsize=4,
-                 label=f"Spectral (kernel on kNN edges) — Hopf fiber/base  [k={k_nn}, sigma={sigma}]")
-    ax1.set_title("Monte-Carlo vs Spectral response on S³ (Hopf fibration S¹→S³→S²)")
-    ax1.set_xlabel("Relaxation bias α")
-    ax1.set_ylabel("Fiber/Base ratio  R(α) = E_fiber / E_base")
-    ax1.grid(True, alpha=0.3)
-    ax1.legend(loc="best")
+  # Reference at alpha=0 (empirical baseline)
+  r0 = sp[np.argmin(np.abs(alphas - 0.0))]
+  ax1.axhline(r0, linestyle="--", label=f"Reference at α=0  (R≈{r0:.3f})")
 
-    if show_energies and ax2 is not None:
-        mc_ef = np.array([p.mc_e_fiber for p in curve])
-        mc_ef_ci = np.array([p.mc_e_fiber_ci for p in curve])
-        mc_eb = np.array([p.mc_e_base for p in curve])
-        mc_eb_ci = np.array([p.mc_e_base_ci for p in curve])
+  ax1.errorbar(
+    alphas, mc, yerr=mc_ci, marker="o", capsize=4,
+    label="Monte-Carlo (on kNN edges) — Hopf fiber/base"
+  )
+  ax1.errorbar(
+    alphas, sp, yerr=sp_ci, marker="o", capsize=4,
+    label=f"Spectral (kernel on kNN edges) — Hopf fiber/base  [k={k_nn}, sigma={sigma}]"
+  )
 
-        sp_ef = np.array([p.spec_e_fiber for p in curve])
-        sp_ef_ci = np.array([p.spec_e_fiber_ci for p in curve])
-        sp_eb = np.array([p.spec_e_base for p in curve])
-        sp_eb_ci = np.array([p.spec_e_base_ci for p in curve])
+  ax1.set_title("Monte-Carlo vs Spectral response on S³ (Hopf fibration S¹→S³→S²)")
+  ax1.set_xlabel("Relaxation bias α")
+  ax1.set_ylabel("Fiber/Base ratio  R(α) = E_fiber / E_base")
+  ax1.grid(True, alpha=0.3)
+  ax1.legend(loc="best")
 
-        ax2.errorbar(alphas, mc_ef, yerr=mc_ef_ci, marker="o", capsize=4, label="MC  E_fiber")
-        ax2.errorbar(alphas, mc_eb, yerr=mc_eb_ci, marker="o", capsize=4, label="MC  E_base")
-        ax2.errorbar(alphas, sp_ef, yerr=sp_ef_ci, marker="o", capsize=4, label="Spec  E_fiber")
-        ax2.errorbar(alphas, sp_eb, yerr=sp_eb_ci, marker="o", capsize=4, label="Spec  E_base")
+  if show_energies and ax2 is not None:
+    mc_ef = np.array([p.mc_e_fiber for p in curve])
+    mc_ef_ci = np.array([p.mc_e_fiber_ci for p in curve])
+    mc_eb = np.array([p.mc_e_base for p in curve])
+    mc_eb_ci = np.array([p.mc_e_base_ci for p in curve])
 
-        ax2.set_xlabel("Relaxation bias α")
-        ax2.set_ylabel("Kernel-weighted energies")
-        ax2.grid(True, alpha=0.3)
-        ax2.legend(loc="best")
+    sp_ef = np.array([p.spec_e_fiber for p in curve])
+    sp_ef_ci = np.array([p.spec_e_fiber_ci for p in curve])
+    sp_eb = np.array([p.spec_e_base for p in curve])
+    sp_eb_ci = np.array([p.spec_e_base_ci for p in curve])
 
-    plt.tight_layout()
-    plt.show()
+    ax2.errorbar(alphas, mc_ef, yerr=mc_ef_ci, marker="o", capsize=4, label="MC  E_fiber")
+    ax2.errorbar(alphas, mc_eb, yerr=mc_eb_ci, marker="o", capsize=4, label="MC  E_base")
+    ax2.errorbar(alphas, sp_ef, yerr=sp_ef_ci, marker="o", capsize=4, label="Spec  E_fiber")
+    ax2.errorbar(alphas, sp_eb, yerr=sp_eb_ci, marker="o", capsize=4, label="Spec  E_base")
 
+    ax2.set_xlabel("Relaxation bias α")
+    ax2.set_ylabel("Kernel-weighted energies")
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(loc="best")
+
+  plt.show()
 
 # -----------------------------
 # CLI
