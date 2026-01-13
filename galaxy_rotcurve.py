@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 G = 4.302e-6  # kpc (km/s)^2 Msun^-1
 c = 3.0e5     # km/s
 H0 = 70.0 / 1000.0  # km/s/kpc
-a0 = c * H0
+eta = 0.15   # O(0.1), projective efficiency factor
+a0 = eta * c * H0
 
 import numpy as np
 
