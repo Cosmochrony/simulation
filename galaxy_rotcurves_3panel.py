@@ -183,5 +183,5 @@ if __name__ == "__main__":
         H0=70.0,
         ups_bul=0.5,
         fit_ups=True,     # set False if you prefer fixed values
-        outfile="cosmochrony_rotcurves_3panel.png",
+        outfile="cosmochrony_rotcurves_3panel.pdf",
     )
