@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+title: "Cosmochrony Simulation"
+type: software
+authors:
+  - family-names: "Beau"
+    given-names: "Jérôme"
+repository-code: "https://github.com/Cosmochrony/simulation"
+url: "https://github.com/Cosmochrony/simulation"
+keywords:
+  - cosmochrony
+  - simulation
+  - numerical methods
+  - relaxation dynamics
+  - chi field
+license: "CC-BY-4.0"
+preferred-citation:
+  type: article
+  title: "Cosmochrony"
+  authors:
+    - family-names: "Beau"
+      given-names: "Jérôme"
+  doi: "10.5281/zenodo.17957509"
+  url: "https://doi.org/10.5281/zenodo.17957509"
