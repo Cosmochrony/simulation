@@ -39,13 +39,8 @@ source .venv/bin/activate   # macOS / Linux
 python -m pip install -U pip
 ```
 ### 2) Install dependencies
-If you have a requirements.txt:
 ```bash
 pip install -r requirements.txt
-```
-If you don’t yet, the typical minimal stack is:
-```bash
-pip install numpy scipy matplotlib
 ```
 ### 3) Run a simulation script
 This repo is script-driven. Typical usage:
