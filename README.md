@@ -45,18 +45,9 @@ pip install -r requirements.txt
 ### 3) Run a simulation script
 This repo is script-driven. Typical usage:
 ```bash
-python path/to/script.py --help
 python path/to/script.py
 ```
-If a main entrypoint exists (example):
-```bash
-python main.py
-```
-If scripts write results, they should do so under output/ (recommended) and/or data/.
-
-Recommended repository layout (target)
-If the repo is still organic, this structure keeps it readable:
-
+Repository layout:
 ```python
 simulation/
   README.md
@@ -77,11 +68,9 @@ simulation/
   docs/          # optional: extra notes, figures
 ```
 ## Outputs and reproducibility
-Outputs (plots, CSV, logs) should be generated deterministically when possible.
+Outputs (plots, CSV, logs) are generated deterministically.
 
-If randomness is used, scripts should expose a --seed option and log it.
-
-To keep the repo light, large outputs should not be committed (use release assets / Zenodo instead).
+When randomness is used, scripts will expose a --seed option and log it.
 
 ## How to cite
 If you use this code in academic work, please cite the Cosmochrony paper and (optionally) this repository.
@@ -89,12 +78,9 @@ A [CITATION.cff](CITATION.cff) is available to standardize citations.
 
 ## Contributing / contact
 Issues and PRs are welcome, especially for:
-
-improving reproducibility (CLI options, config files),
-
-documentation and “how to reproduce figure X from the paper” recipes,
-
-performance improvements that preserve clarity.
+- improving reproducibility (CLI options, config files),
+- documentation and “how to reproduce figure X from the paper” recipes,
+- performance improvements that preserve clarity.
 
 ## License
 This repository is released under the [Creative Commons Attribution 4.0 International License (CC BY 4.0)](LICENSE).
