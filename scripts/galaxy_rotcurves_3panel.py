@@ -178,7 +178,7 @@ if __name__ == "__main__":
 
     plot_3panel(
         galaxies=galaxies,
-        data_dir="data/Rotmod_LTG/",     # change if your rotmod files are in another folder
+        data_dir="../data/Rotmod_LTG/",     # change if your rotmod files are in another folder
         eta=0.15,
         H0=70.0,
         ups_bul=0.5,

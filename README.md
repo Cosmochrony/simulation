@@ -53,7 +53,7 @@ simulation/
   README.md
   LICENSE
   CITATION.cff
-  requirements.txt (or pyproject.toml)
+  requirements.txt
   src/
     cosmochrony_sim/
       __init__.py

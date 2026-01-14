@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 # ---------------------------------------------------------------------
 # Inputs (place these two files next to this script)
 # ---------------------------------------------------------------------
-DATA_DIR = "data/Planck/release_3/ancillary-data/cosmoparams/"
+DATA_DIR = "../data/Planck/release_3/ancillary-data/cosmoparams/"
 PLANCK_DATA_FILE = DATA_DIR + "COM_PowerSpect_CMB-TT-full_R3.01.txt"
 LCDM_THEORY_FILE = DATA_DIR + "COM_PowerSpect_CMB-base-plikHM-TTTEEE-lowl-lowE-lensing-minimum-theory_R3.01.txt"
 
