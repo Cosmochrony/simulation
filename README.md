@@ -111,10 +111,89 @@ python scripts/galaxy_rotcurves_3panel.py
 python scripts/plot_cmb_lowell_planck_vs_cosmochrony.py
 ```
 
-## Outputs and reproducibility
-- Many scripts generate figures (PDF/PNG) directly in figures/, appendix_D4/, or the repository root.
-- When randomness is involved, scripts are expected to expose a --seed parameter or log the seed explicitly.
-- Large sweep outputs are grouped under appendix_D4/ for traceability with the manuscript.
+## Reproducing results
+
+This section provides minimal, concrete recipes to reproduce representative numerical
+results used in the Cosmochrony manuscript.  
+All commands assume that the virtual environment is activated and dependencies installed.
+
+---
+
+### 1) Appendix D4 — χ-field relaxation sweeps and saturation diagnostics
+
+Appendix D4 relies on parameter sweeps whose aggregated results are stored under
+`appendix_D4/`.
+
+To regenerate or aggregate sweep summaries:
+
+```bash
+python scripts/collect_D4_csv.py
+```
+This script scans the sweep result directories and produces consolidated CSV summaries
+(e.g. summary_D4_all.csv), used to generate the figures in Appendix D4.
+
+Precomputed sweep outputs and figures are available under:
+```bath
+appendix_D4/sweeps/
+```
+### 2) Spectral diagnostics — convergence and ratio tests
+
+Key spectral diagnostics (including convergence and characteristic ratios) are implemented
+in the `spectral/` directory.
+
+Typical runs:
+```bash
+python spectral/convergence_8_3.py
+python spectral/spectral_ratio.py
+python spectral/lap_ratio.py
+```
+To generate the corresponding spectral figures:
+```bash
+python spectral/make_spectral_fig.py
+```
+These scripts probe eigenmode structure, convergence behavior, and robustness of the
+spectral ratios discussed in the manuscript.
+
+### 3) CMB low-ℓ comparison (Planck vs Cosmochrony)
+Low-ℓ CMB comparisons use publicly available Planck Release 3 data included under `data/Planck/`.
+
+To generate the comparison plots:
+```bash
+python scripts/plot_cmb_lowell_planck_vs_cosmochrony.py
+```
+Additional rescaling / correction tests:
+```bash
+python scripts/cmb_lowell_tests_corr_rescale.py
+```
+Generated figures include:
+- `cmb_lowell_planck_lcdm_cosmochrony.pdf`
+- related diagnostic PDFs in the repository root or `figures/`.
+
+### 4) Galaxy rotation curves
+
+Galaxy rotation curve data (LTG sample) are provided under `data/Rotmod_LTG/`.
+
+To reproduce the multi-panel rotation curve comparison:
+```bash
+python scripts/galaxy_rotcurves_3panel.py
+```
+This generates:
+- `galaxy_rotcurves_3panel.pdf`
+
+### Notes on reproducibility
+- Scripts are intended to be **self-contained and explicit**, rather than hidden behind a unified pipeline.
+- Many scripts generate figures directly as PDF/PNG for traceability with the manuscript.
+- When randomness is involved, scripts either fix or report the random seed.
+- Large parameter sweeps are precomputed and versioned for transparency.
+
+### Scope and intent
+These simulations are numerical probes, not a standalone simulation framework.
+Their purpose is to:
+- validate internal consistency,
+- explore stability and convergence regimes,
+- support figures and tables in the Cosmochrony manuscript.
+
+They should be read in conjunction with the corresponding theoretical sections of the paper.
 
 ## How to cite
 If you use this code in academic work, please cite the Cosmochrony paper.
