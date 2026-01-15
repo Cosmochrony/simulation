@@ -42,7 +42,7 @@ def v_cosmo(r, vgas, vdisk, vbul, ups_disk=0.5, ups_bul=0.7):
   return np.sqrt(r * geff)
 
 # example: NGC 3198
-prefix = "data/Rotmod_LTG/"
+prefix = "../data/Rotmod_LTG/"
 r, vobs, ev, vgas, vdisk, vbulge, sbdisk, sbbul = load_rotmod(prefix + "NGC3198_rotmod.dat")
 
 ups = 0.5  # example stellar M/L

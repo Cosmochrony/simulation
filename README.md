@@ -100,6 +100,7 @@ pip install -r requirements.txt
 This repository is script-driven. Typical usage:
 ```bash
 python scripts/<script>.py
+python scripts/<script>.py --help
 python spectral/<script>.py
 python geometry/<script>.py
 ```
