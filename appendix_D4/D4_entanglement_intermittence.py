@@ -15,7 +15,7 @@ k_eigs = 40             # low-lying spectrum
 r_cut = 0.35            # relational cutoff
 sigma = 0.15            # interaction scale
 K_max = 1.0             # Born–Infeld saturation
-eps_deg = 1e-3          # degeneracy tolerance
+eps_deg = 5e-2  # ou 1e-2 à 1e-1 selon la courbe voulue
 
 Cs = np.linspace(0.05, 1.0, 30)  # compression / saturation sweep
 
@@ -49,19 +49,34 @@ def build_laplacian(points, Q, C):
     L = diags(D) - csr_matrix(W)
     return L
 
+
 def degeneracy_proxy(evals, eps=1e-3):
-    evals = np.sort(evals)
-    groups = []
-    current = [evals[0]]
-    for x in evals[1:]:
-        if abs(x - current[-1]) <= eps * max(1.0, abs(current[-1])):
-            current.append(x)
-        else:
-            groups.append(len(current))
-            current = [x]
-    groups.append(len(current))
-    Delta = sum(m - 1 for m in groups)
-    return Delta, groups
+  """
+  Continuous 'spectral crowding' proxy (drop-in replacement).
+
+  Returns:
+    Delta: in [0,1] (higher = more quasi-degeneracy / stronger compression)
+    groups: diagnostic dict (kept for API compatibility)
+  """
+  evals = np.sort(np.asarray(evals, dtype=float))
+  gaps = np.diff(evals)
+
+  # Robust scale for "what counts as small gap"
+  # If all gaps ~0 (rare), avoid division by zero.
+  med = np.median(gaps)
+  if not np.isfinite(med) or med <= 0:
+    med = np.mean(gaps[gaps > 0]) if np.any(gaps > 0) else 1.0
+
+  # Use eps as a dimensionless tuning knob:
+  # eps ~ 1e-2 to 1e-1 is typical for smooth curves.
+  sigma_gap = max(eps * med, 1e-12)
+
+  # Crowd score: small gaps contribute ~1, large gaps contribute ~0
+  crowd = np.exp(-gaps / sigma_gap)
+
+  Delta = float(np.mean(crowd))  # normalized to [0,1]
+  groups = {"median_gap": float(med), "sigma_gap": float(sigma_gap)}
+  return Delta, groups
 
 def chiral_asymmetry(evecs, Q):
     # project eigenmodes onto chirality
@@ -81,8 +96,8 @@ for C in Cs:
         L, k=k_eigs, which='SM', return_eigenvectors=True
     )
 
-    Delta, groups = degeneracy_proxy(evals, eps_deg)
-    Delta_vals.append(Delta / k_eigs)
+    Delta, groups = degeneracy_proxy(evals, eps=eps_deg)
+    Delta_vals.append(Delta)
 
     chiral = chiral_asymmetry(evecs, Q)
     Chiral_vals.append(chiral)
