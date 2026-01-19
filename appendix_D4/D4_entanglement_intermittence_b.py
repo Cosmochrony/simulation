@@ -180,6 +180,13 @@ ax[2].set_ylabel('Effective chiral bias')
 ax[2].set_title('CP-like chiral selection diagnostic')
 
 plt.tight_layout()
+
+OUT_PDF = "D4_entanglement_intermittence_b.pdf"
+OUT_PNG = "D4_entanglement_intermittence_b.png"
+
+plt.savefig(OUT_PDF, format="pdf", bbox_inches="tight")
+plt.savefig(OUT_PNG, format="png", dpi=200, bbox_inches="tight")
+
 plt.show()
 
 # -----------------------------
