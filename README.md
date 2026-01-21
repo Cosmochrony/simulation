@@ -1,4 +1,4 @@
-# Cosmochrony – Simulation
+# Cosmochrony – Simulation Code
 [![DOI](https://zenodo.org/badge/1123297744.svg)](https://doi.org/10.5281/zenodo.18292335)
 
 Simulation algorithms and numerical experiments supporting the *Cosmochrony* framework, with a focus on **χ-field relaxation dynamics** and the technical material referenced in the paper appendix (Numerical Methods / Simulation Algorithms).
