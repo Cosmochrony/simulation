@@ -29,6 +29,17 @@ def load_rotmod(filename):
     return r, vobs, ev, vgas, vdisk, vbul
 
 
+def geff_from_gN(gN, a_star, law="simple_sqrt"):
+  if law == "simple_sqrt":
+    return np.sqrt(gN * gN + a_star * gN)
+  if law == "simple_nu":
+    # nu(y) = 0.5 + 0.5*sqrt(1 + 4/y), with y = gN/a_star
+    y = np.clip(gN / a_star, 1e-12, None)
+    nu = 0.5 + 0.5 * np.sqrt(1.0 + 4.0 / y)
+    return nu * gN
+  raise ValueError(f"Unknown law: {law}")
+
+
 # -----------------------------
 # Cosmochrony effective law
 # -----------------------------
@@ -59,7 +70,7 @@ def vcosmo_from_components(
     vbar2 = vgas**2 + ups_disk * vdisk**2 + ups_bul * vbul**2
     gN = vbar2 / r  # (km/s)^2 / kpc
 
-    geff = np.sqrt(gN * gN + a_star * gN)
+    geff = geff_from_gN(gN, a_star=a_star, law="simple_sqrt")
     v_model = np.sqrt(r * geff)
     return v_model
 
