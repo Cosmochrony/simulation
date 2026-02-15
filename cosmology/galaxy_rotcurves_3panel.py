@@ -70,7 +70,7 @@ def vcosmo_from_components(
     vbar2 = vgas**2 + ups_disk * vdisk**2 + ups_bul * vbul**2
     gN = vbar2 / r  # (km/s)^2 / kpc
 
-    geff = geff_from_gN(gN, a_star=a_star, law="simple_sqrt")
+    geff = geff_from_gN(gN, a_star=a_star, law="simple_nu")
     v_model = np.sqrt(r * geff)
     return v_model
 
