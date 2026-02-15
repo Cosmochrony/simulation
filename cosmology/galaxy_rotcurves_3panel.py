@@ -12,61 +12,61 @@ import numpy as np
 # I/O: robust SPARC rotmod loader
 # -----------------------------
 def load_rotmod(filename):
-    """
-    Expected columns (SPARC rotmod):
-    Rad  Vobs  errV  Vgas  Vdisk  Vbul  SBdisk  SBbul
-    Some files may omit SB columns; we keep robust parsing.
-    Returns: r[kpc], vobs[km/s], ev[km/s], vgas[km/s], vdisk[km/s], vbul[km/s]
-    """
-    data = np.loadtxt(filename, comments="#")
-    if data.ndim != 2:
-        raise ValueError(f"{filename}: expected 2D array, got shape {data.shape}")
-    ncol = data.shape[1]
-    if ncol < 6:
-        raise ValueError(f"{filename}: expected at least 6 columns, got {ncol}")
+  """
+  Expected columns (SPARC rotmod):
+  Rad  Vobs  errV  Vgas  Vdisk  Vbul  SBdisk  SBbul
+  Some files may omit SB columns; we keep robust parsing.
+  Returns: r[kpc], vobs[km/s], ev[km/s], vgas[km/s], vdisk[km/s], vbul[km/s]
+  """
+  data = np.loadtxt(filename, comments="#")
+  if data.ndim != 2:
+    raise ValueError(f"{filename}: expected 2D array, got shape {data.shape}")
+  ncol = data.shape[1]
+  if ncol < 6:
+    raise ValueError(f"{filename}: expected at least 6 columns, got {ncol}")
 
-    r = data[:, 0]
-    vobs = data[:, 1]
-    ev = data[:, 2]
-    vgas = data[:, 3]
-    vdisk = data[:, 4]
-    vbul = data[:, 5]
-    return r, vobs, ev, vgas, vdisk, vbul
+  r = data[:, 0]
+  vobs = data[:, 1]
+  ev = data[:, 2]
+  vgas = data[:, 3]
+  vdisk = data[:, 4]
+  vbul = data[:, 5]
+  return r, vobs, ev, vgas, vdisk, vbul
 
 
 # -----------------------------
 # File listing
 # -----------------------------
 def list_rotmod_files(data_dir, limit=None, seed=0):
-    pattern = os.path.join(data_dir, "*_rotmod.dat")
-    files = sorted(glob.glob(pattern))
-    if not files:
-        raise FileNotFoundError(f"No rotmod files found in: {data_dir}")
+  pattern = os.path.join(data_dir, "*_rotmod.dat")
+  files = sorted(glob.glob(pattern))
+  if not files:
+    raise FileNotFoundError(f"No rotmod files found in: {data_dir}")
 
-    if limit is None or limit >= len(files):
-        return files
+  if limit is None or limit >= len(files):
+    return files
 
-    rng = np.random.default_rng(seed)
-    idx = rng.choice(len(files), size=limit, replace=False)
-    return [files[i] for i in sorted(idx)]
+  rng = np.random.default_rng(seed)
+  idx = rng.choice(len(files), size=limit, replace=False)
+  return [files[i] for i in sorted(idx)]
 
 
 # -----------------------------
 # Effective law (parameterized by a_star)
 # -----------------------------
 def geff_from_gN(gN, a_star, law="simple_nu"):
-    """
-    gN, a_star in (km/s)^2 / kpc.
-    """
-    if law == "simple_sqrt":
-        return np.sqrt(gN * gN + a_star * gN)
+  """
+  gN, a_star in (km/s)^2 / kpc.
+  """
+  if law == "simple_sqrt":
+    return np.sqrt(gN * gN + a_star * gN)
 
-    if law == "simple_nu":
-        y = np.clip(gN / a_star, 1e-12, None)
-        nu = 0.5 + 0.5 * np.sqrt(1.0 + 4.0 / y)
-        return nu * gN
+  if law == "simple_nu":
+    y = np.clip(gN / a_star, 1e-12, None)
+    nu = 0.5 + 0.5 * np.sqrt(1.0 + 4.0 / y)
+    return nu * gN
 
-    raise ValueError(f"Unknown law: {law}")
+  raise ValueError(f"Unknown law: {law}")
 
 
 def vcosmo_from_components(
@@ -79,21 +79,21 @@ def vcosmo_from_components(
     a_star=3700.0,
     law="simple_nu",
 ):
-    """
-    Units:
-        r in kpc
-        velocities in km/s
-        gN in (km/s)^2/kpc
-        a_star in (km/s)^2/kpc
+  """
+  Units:
+      r in kpc
+      velocities in km/s
+      gN in (km/s)^2/kpc
+      a_star in (km/s)^2/kpc
 
-    vbar^2 = vgas^2 + ups_disk*vdisk^2 + ups_bul*vbul^2
-    """
-    r = np.clip(r_kpc, 1e-6, None)
+  vbar^2 = vgas^2 + ups_disk*vdisk^2 + ups_bul*vbul^2
+  """
+  r = np.clip(r_kpc, 1e-6, None)
 
-    vbar2 = vgas**2 + ups_disk * vdisk**2 + ups_bul * vbul**2
-    gN = vbar2 / r
-    geff = geff_from_gN(gN, a_star=a_star, law=law)
-    return np.sqrt(r * geff)
+  vbar2 = vgas ** 2 + ups_disk * vdisk ** 2 + ups_bul * vbul ** 2
+  gN = vbar2 / r
+  geff = geff_from_gN(gN, a_star=a_star, law=law)
+  return np.sqrt(r * geff)
 
 
 # -----------------------------
@@ -113,52 +113,52 @@ def fit_ups_disk(
     ups_max=1.5,
     ngrid=600,
 ):
-    mask = (ev > 0) & np.isfinite(ev) & np.isfinite(vobs) & np.isfinite(r)
-    r2, vobs2, ev2 = r[mask], vobs[mask], ev[mask]
+  mask = (ev > 0) & np.isfinite(ev) & np.isfinite(vobs) & np.isfinite(r)
+  r2, vobs2, ev2 = r[mask], vobs[mask], ev[mask]
 
-    grid = np.linspace(ups_min, ups_max, ngrid)
-    chi2_vals = np.empty_like(grid)
+  grid = np.linspace(ups_min, ups_max, ngrid)
+  chi2_vals = np.empty_like(grid)
 
-    for i, ups in enumerate(grid):
-        vm = vcosmo_from_components(
-            r2,
-            vgas[mask],
-            vdisk[mask],
-            vbul[mask],
-            ups_disk=ups,
-            ups_bul=ups_bul,
-            a_star=a_star,
-            law=law,
-        )
-        chi2_vals[i] = np.sum(((vobs2 - vm) / ev2) ** 2)
+  for i, ups in enumerate(grid):
+    vm = vcosmo_from_components(
+      r2,
+      vgas[mask],
+      vdisk[mask],
+      vbul[mask],
+      ups_disk=ups,
+      ups_bul=ups_bul,
+      a_star=a_star,
+      law=law,
+    )
+    chi2_vals[i] = np.sum(((vobs2 - vm) / ev2) ** 2)
 
-    best_i = int(np.argmin(chi2_vals))
-    best_ups = float(grid[best_i])
+  best_i = int(np.argmin(chi2_vals))
+  best_ups = float(grid[best_i])
 
-    dof = max(len(vobs2) - 1, 1)
-    red_chi2 = float(chi2_vals[best_i] / dof)
-    return best_ups, red_chi2
+  dof = max(len(vobs2) - 1, 1)
+  red_chi2 = float(chi2_vals[best_i] / dof)
+  return best_ups, red_chi2
 
 
 # -----------------------------
 # Per-file evaluation
 # -----------------------------
 def redchi2_for_file(path, a_star, ups_bul=0.5, law="simple_nu"):
-    r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
-    ups, red = fit_ups_disk(
-        r,
-        vobs,
-        ev,
-        vgas,
-        vdisk,
-        vbul,
-        ups_bul=ups_bul,
-        a_star=a_star,
-        law=law,
-    )
-    filename = os.path.basename(path)
-    name = filename.replace("_rotmod.dat", "")
-    return name, ups, red, filename
+  r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
+  ups, red = fit_ups_disk(
+    r,
+    vobs,
+    ev,
+    vgas,
+    vdisk,
+    vbul,
+    ups_bul=ups_bul,
+    a_star=a_star,
+    law=law,
+  )
+  filename = os.path.basename(path)
+  name = filename.replace("_rotmod.dat", "")
+  return name, ups, red, filename
 
 
 # -----------------------------
@@ -173,37 +173,37 @@ def fit_global_a_star_robust(
     law="simple_nu",
     score="median",
 ):
-    a_grid = np.linspace(a_min, a_max, ngrid)
-    scores = np.empty_like(a_grid)
+  a_grid = np.linspace(a_min, a_max, ngrid)
+  scores = np.empty_like(a_grid)
 
-    for i, a_star in enumerate(a_grid):
-        vals = []
-        for path in files:
-            try:
-                _, _, red, _ = redchi2_for_file(path, a_star=a_star, ups_bul=ups_bul, law=law)
-            except Exception:
-                continue
-            if np.isfinite(red):
-                vals.append(red)
+  for i, a_star in enumerate(a_grid):
+    vals = []
+    for path in files:
+      try:
+        _, _, red, _ = redchi2_for_file(path, a_star=a_star, ups_bul=ups_bul, law=law)
+      except Exception:
+        continue
+      if np.isfinite(red):
+        vals.append(red)
 
-        if not vals:
-            scores[i] = np.inf
-            continue
+    if not vals:
+      scores[i] = np.inf
+      continue
 
-        v = np.array(vals, dtype=float)
+    v = np.array(vals, dtype=float)
 
-        if score == "median":
-            scores[i] = float(np.median(v))
-        elif score == "trimmed_mean":
-            v2 = np.sort(v)
-            k = max(int(0.1 * len(v2)), 0)
-            v2 = v2[k:len(v2) - k] if len(v2) - 2 * k >= 5 else v2
-            scores[i] = float(np.mean(v2))
-        else:
-            raise ValueError(f"Unknown score: {score}")
+    if score == "median":
+      scores[i] = float(np.median(v))
+    elif score == "trimmed_mean":
+      v2 = np.sort(v)
+      k = max(int(0.1 * len(v2)), 0)
+      v2 = v2[k:len(v2) - k] if len(v2) - 2 * k >= 5 else v2
+      scores[i] = float(np.mean(v2))
+    else:
+      raise ValueError(f"Unknown score: {score}")
 
-    best_i = int(np.argmin(scores))
-    return float(a_grid[best_i]), float(scores[best_i])
+  best_i = int(np.argmin(scores))
+  return float(a_grid[best_i]), float(scores[best_i])
 
 
 # -----------------------------
@@ -218,55 +218,55 @@ def summarize_sample(
     ups_min=0.05,
     ups_max=1.5,
 ):
-    rows = []
-    skipped = 0
+  rows = []
+  skipped = 0
 
-    for path in files:
-        try:
-            name, ups, red, filename = redchi2_for_file(path, a_star=a_star, ups_bul=ups_bul, law=law)
-            rows.append((name, filename, ups, red))
-        except Exception:
-            skipped += 1
+  for path in files:
+    try:
+      name, ups, red, filename = redchi2_for_file(path, a_star=a_star, ups_bul=ups_bul, law=law)
+      rows.append((name, filename, ups, red))
+    except Exception:
+      skipped += 1
 
-    rows = [r for r in rows if np.isfinite(r[3])]
-    reds = np.array([r[3] for r in rows], dtype=float)
-    upss = np.array([r[2] for r in rows], dtype=float)
+  rows = [r for r in rows if np.isfinite(r[3])]
+  reds = np.array([r[3] for r in rows], dtype=float)
+  upss = np.array([r[2] for r in rows], dtype=float)
 
-    if len(rows) == 0:
-        print("No valid galaxies in sample.")
-        return rows
-
-    med = float(np.median(reds))
-    p16 = float(np.percentile(reds, 16))
-    p84 = float(np.percentile(reds, 84))
-    frac5 = float(np.mean(reds < 5.0))
-    frac10 = float(np.mean(reds < 10.0))
-
-    eps = 1e-9
-    frac_ups_min = float(np.mean(upss <= (ups_min + eps)))
-    frac_ups_max = float(np.mean(upss >= (ups_max - eps)))
-
-    best = sorted(rows, key=lambda x: x[3])[:topk]
-    worst = sorted(rows, key=lambda x: x[3], reverse=True)[:topk]
-
-    print(f"Law: {law}")
-    print(f"a_star = {a_star:.1f} (km/s)^2/kpc")
-    print(f"N = {len(rows)} galaxies  (skipped={skipped})")
-    print(f"red chi2 median = {med:.2f}   (P16={p16:.2f}, P84={p84:.2f})")
-    print(f"fraction red chi2 < 5:  {frac5:.2%}")
-    print(f"fraction red chi2 < 10: {frac10:.2%}")
-    print(f"fraction ups at min ({ups_min}): {frac_ups_min:.2%}")
-    print(f"fraction ups at max ({ups_max}): {frac_ups_max:.2%}")
-
-    print("\nBest (lowest red chi2):")
-    for name, filename, ups, red in best:
-        print(f"  {name:18s}  ups={ups:5.2f}  redchi2={red:7.2f}  file={filename}")
-
-    print("\nWorst (highest red chi2):")
-    for name, filename, ups, red in worst:
-        print(f"  {name:18s}  ups={ups:5.2f}  redchi2={red:7.2f}  file={filename}")
-
+  if len(rows) == 0:
+    print("No valid galaxies in sample.")
     return rows
+
+  med = float(np.median(reds))
+  p16 = float(np.percentile(reds, 16))
+  p84 = float(np.percentile(reds, 84))
+  frac5 = float(np.mean(reds < 5.0))
+  frac10 = float(np.mean(reds < 10.0))
+
+  eps = 1e-9
+  frac_ups_min = float(np.mean(upss <= (ups_min + eps)))
+  frac_ups_max = float(np.mean(upss >= (ups_max - eps)))
+
+  best = sorted(rows, key=lambda x: x[3])[:topk]
+  worst = sorted(rows, key=lambda x: x[3], reverse=True)[:topk]
+
+  print(f"Law: {law}")
+  print(f"a_star = {a_star:.1f} (km/s)^2/kpc")
+  print(f"N = {len(rows)} galaxies  (skipped={skipped})")
+  print(f"red chi2 median = {med:.2f}   (P16={p16:.2f}, P84={p84:.2f})")
+  print(f"fraction red chi2 < 5:  {frac5:.2%}")
+  print(f"fraction red chi2 < 10: {frac10:.2%}")
+  print(f"fraction ups at min ({ups_min}): {frac_ups_min:.2%}")
+  print(f"fraction ups at max ({ups_max}): {frac_ups_max:.2%}")
+
+  print("\nBest (lowest red chi2):")
+  for name, filename, ups, red in best:
+    print(f"  {name:18s}  ups={ups:5.2f}  redchi2={red:7.2f}  file={filename}")
+
+  print("\nWorst (highest red chi2):")
+  for name, filename, ups, red in worst:
+    print(f"  {name:18s}  ups={ups:5.2f}  redchi2={red:7.2f}  file={filename}")
+
+  return rows
 
 
 # -----------------------------
@@ -281,76 +281,101 @@ def plot_3panel(
     fit_ups=True,
     outfile="cosmochrony_rotcurves_3panel.png",
 ):
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2), sharey=True)
+  fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.2), sharey=True)
 
-    for ax, g in zip(axes, galaxies):
-        path = f"{data_dir.rstrip('/')}/{g['file']}"
-        r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
+  for ax, g in zip(axes, galaxies):
+    path = f"{data_dir.rstrip('/')}/{g['file']}"
+    r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
 
-        if fit_ups:
-            ups_disk, redchi2 = fit_ups_disk(
-                r,
-                vobs,
-                ev,
-                vgas,
-                vdisk,
-                vbul,
-                ups_bul=ups_bul,
-                a_star=a_star,
-                law=law,
-            )
-        else:
-            ups_disk = float(g.get("ups_disk", 0.5))
-            vm = vcosmo_from_components(
-                r,
-                vgas,
-                vdisk,
-                vbul,
-                ups_disk=ups_disk,
-                ups_bul=ups_bul,
-                a_star=a_star,
-                law=law,
-            )
-            mask = ev > 0
-            dof = max(int(np.sum(mask)) - 1, 1)
-            redchi2 = float(np.sum(((vobs[mask] - vm[mask]) / ev[mask]) ** 2) / dof)
+    if fit_ups:
+      ups_disk, redchi2 = fit_ups_disk(
+        r,
+        vobs,
+        ev,
+        vgas,
+        vdisk,
+        vbul,
+        ups_bul=ups_bul,
+        a_star=a_star,
+        law=law,
+      )
+    else:
+      ups_disk = float(g.get("ups_disk", 0.5))
+      vm = vcosmo_from_components(
+        r,
+        vgas,
+        vdisk,
+        vbul,
+        ups_disk=ups_disk,
+        ups_bul=ups_bul,
+        a_star=a_star,
+        law=law,
+      )
+      mask = ev > 0
+      dof = max(int(np.sum(mask)) - 1, 1)
+      redchi2 = float(np.sum(((vobs[mask] - vm[mask]) / ev[mask]) ** 2) / dof)
 
-        vmodel = vcosmo_from_components(
-            r,
-            vgas,
-            vdisk,
-            vbul,
-            ups_disk=ups_disk,
-            ups_bul=ups_bul,
-            a_star=a_star,
-            law=law,
-        )
-
-        ax.plot(r, vmodel, label="Cosmochrony")
-        ax.errorbar(r, vobs, yerr=ev, fmt="o", ms=4.5, capsize=2.0, label="Observed")
-        ax.set_title(f"{g['name']}\n$\\Upsilon_\\star={ups_disk:.2f}$, $\\chi^2_\\nu={redchi2:.2f}$")
-        ax.set_xlabel(r"$r$ [kpc]")
-        ax.grid(True, alpha=0.25)
-
-    axes[0].set_ylabel(r"$v$ [km/s]")
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(
-        handles,
-        labels,
-        loc="upper center",
-        ncol=2,
-        frameon=True,
-        bbox_to_anchor=(0.5, 1.08),
+    vmodel = vcosmo_from_components(
+      r,
+      vgas,
+      vdisk,
+      vbul,
+      ups_disk=ups_disk,
+      ups_bul=ups_bul,
+      a_star=a_star,
+      law=law,
     )
 
-    fig.suptitle(
-        rf"Effective Rotation Curves (global fit: $a_\star={a_star:.0f}$ $(\mathrm{{km/s}})^2/\mathrm{{kpc}}$)",
-        y=1.16,
-    )
-    fig.tight_layout()
-    fig.savefig(outfile, dpi=180, bbox_inches="tight")
-    print(f"Saved: {outfile}")
+    ax.plot(r, vmodel, label="Cosmochrony")
+    ax.errorbar(r, vobs, yerr=ev, fmt="o", ms=4.5, capsize=2.0, label="Observed")
+    ax.set_title(f"{g['name']}\n$\\Upsilon_\\star={ups_disk:.2f}$, $\\chi^2_\\nu={redchi2:.2f}$")
+    ax.set_xlabel(r"$r$ [kpc]")
+    ax.grid(True, alpha=0.25)
+
+  axes[0].set_ylabel(r"$v$ [km/s]")
+
+  handles, labels = axes[0].get_legend_handles_labels()
+  fig.legend(
+    handles,
+    labels,
+    loc="upper center",
+    ncol=2,
+    frameon=True,
+    bbox_to_anchor=(0.5, 1.08),
+  )
+
+  fig.suptitle(
+    rf"Effective Rotation Curves (global fit: $a_\star={a_star:.0f}$ $(\mathrm{{km/s}})^2/\mathrm{{kpc}}$)",
+    y=1.16,
+  )
+  fig.tight_layout()
+  fig.savefig(outfile, dpi=180, bbox_inches="tight")
+  print(f"Saved: {outfile}")
+
+
+def classify_curve_shape(r, v):
+  """
+  Classification simple basée sur pente moyenne aux grands rayons.
+  """
+  if len(r) < 6:
+    return "unknown"
+
+  # On regarde le dernier tiers des points
+  n = len(r)
+  idx = slice(int(2 * n / 3), n)
+
+  r2 = r[idx]
+  v2 = v[idx]
+
+  # pente moyenne
+  coeffs = np.polyfit(r2, v2, 1)
+  slope = coeffs[0]
+
+  if slope > 1.0:
+    return "rising"
+  if slope < -1.0:
+    return "declining"
+  return "flat"
 
 
 def run_robust_fit_suite(
@@ -460,18 +485,169 @@ def run_robust_fit_suite(
 
   return files
 
-if __name__ == "__main__":
-    data_dir = "../data/Rotmod_LTG/"
 
-    run_robust_fit_suite(
-        data_dir=data_dir,
-        limit=None,
-        seed=4,
-        a_min=1500.0,
-        a_max=8000.0,
-        ngrid=120,
-        ups_bul=0.5,
-        law="simple_nu",
-        score="median",
-        ups_ranges=((0.01, 2.0),),
-    )
+def select_showcase_galaxies(files, a_star, ups_bul=0.7, law="simple_nu"):
+  candidates = []
+
+  for path in files:
+    try:
+      r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
+      ups, red = fit_ups_disk(
+        r, vobs, ev, vgas, vdisk, vbul,
+        ups_bul=ups_bul,
+        a_star=a_star,
+        law=law,
+        ups_min=0.01,
+        ups_max=2.0,
+      )
+    except Exception:
+      continue
+
+    if not np.isfinite(red):
+      continue
+
+    if 0.5 < red < 5.0:  # fenêtre qualité
+      shape = classify_curve_shape(r, vobs)
+      name = os.path.basename(path).replace("_rotmod.dat", "")
+      candidates.append((shape, name, path, red))
+
+  selected = {}
+  for shape, name, path, red in candidates:
+    if shape not in selected:
+      selected[shape] = (name, path, red)
+
+  galaxies = []
+  for shape in ["rising", "flat", "declining"]:
+    if shape in selected:
+      name, path, red = selected[shape]
+      galaxies.append({
+        "name": name,
+        "file": os.path.basename(path)
+      })
+
+  return galaxies
+
+
+def plot_chi2_distribution(
+    files,
+    a_star,
+    ups_bul=0.7,
+    law="simple_nu",
+    ups_min=0.01,
+    ups_max=2.0,
+    outfile="chi2_distribution.pdf",
+    nbins=30,
+    chi2_clip=50.0,
+):
+  reds = []
+  skipped = 0
+
+  for path in files:
+    try:
+      r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
+      _, red = fit_ups_disk(
+        r,
+        vobs,
+        ev,
+        vgas,
+        vdisk,
+        vbul,
+        ups_bul=ups_bul,
+        a_star=a_star,
+        law=law,
+        ups_min=ups_min,
+        ups_max=ups_max,
+        ngrid=600,
+      )
+      if np.isfinite(red):
+        reds.append(float(red))
+    except Exception:
+      skipped += 1
+
+  if not reds:
+    raise RuntimeError("No valid chi2 values produced.")
+
+  reds = np.array(reds, dtype=float)
+
+  med = float(np.median(reds))
+  p16 = float(np.percentile(reds, 16))
+  p84 = float(np.percentile(reds, 84))
+  frac5 = float(np.mean(reds < 5.0))
+  frac10 = float(np.mean(reds < 10.0))
+
+  # Clip only for display (keeps stats un-clipped)
+  reds_plot = np.clip(reds, 0.0, chi2_clip)
+
+  fig = plt.figure(figsize=(6.6, 4.2))
+  ax = fig.add_subplot(111)
+
+  ax.hist(reds_plot, bins=nbins)
+  ax.axvline(med, linewidth=2.0)
+
+  ax.set_xlabel(r"Reduced $\chi^2_\nu$")
+  ax.set_ylabel("Number of galaxies")
+  ax.set_title(r"Distribution of reduced $\chi^2_\nu$ (SPARC sample)")
+  ax.set_xlim(0, 20)
+  ax.grid(True, alpha=0.25)
+
+  text = (
+    f"median={med:.2f}\n"
+    f"P16={p16:.2f}, P84={p84:.2f}\n"
+    f"frac(chi2_nu < 5) = {frac5:.1%}\n"
+    f"frac($\\chi^2_\\nu<10$)={frac10:.1%}\n"
+    f"skipped={skipped}"
+  )
+  ax.text(
+    0.98,
+    0.98,
+    text,
+    transform=ax.transAxes,
+    ha="right",
+    va="top",
+    fontsize=9,
+    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+  )
+
+  fig.tight_layout()
+  fig.savefig(outfile, dpi=200, bbox_inches="tight")
+  print(f"Saved: {outfile}")
+
+
+if __name__ == "__main__":
+  data_dir = "../data/Rotmod_LTG/"
+  files = list_rotmod_files(data_dir, limit=None)
+
+  run_robust_fit_suite(
+    data_dir=data_dir,
+    limit=None,
+    seed=4,
+    a_min=1500.0,
+    a_max=8000.0,
+    ngrid=120,
+    ups_bul=0.5,
+    law="simple_nu",
+    score="median",
+    ups_ranges=((0.01, 2.0),),
+  )
+
+  best_a, _ = fit_global_a_star_robust(
+    files=files,
+    a_min=1500.0,
+    a_max=8000.0,
+    ngrid=120,
+    ups_bul=0.7,
+    law="simple_nu",
+    score="median",
+  )
+
+  plot_chi2_distribution(
+    files=files,
+    a_star=best_a,
+    ups_bul=0.7,
+    law="simple_nu",
+    ups_min=0.01,
+    ups_max=2.0,
+    outfile="chi2_distribution.pdf",
+    nbins=30,
+    chi2_clip=50.0,
+  )
