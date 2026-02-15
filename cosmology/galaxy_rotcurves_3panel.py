@@ -465,13 +465,13 @@ if __name__ == "__main__":
 
     run_robust_fit_suite(
         data_dir=data_dir,
-        limit=80,
+        limit=None,
         seed=4,
         a_min=1500.0,
         a_max=8000.0,
         ngrid=120,
         ups_bul=0.5,
         law="simple_nu",
-        score="trimmed_mean",
-        ups_ranges=((0.05, 1.5), (0.01, 2.0)),
+        score="median",
+        ups_ranges=((0.01, 2.0),),
     )
