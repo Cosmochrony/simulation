@@ -355,7 +355,7 @@ def plot_3panel(
 
 def run_robust_fit_suite(
     data_dir,
-    limit=80,
+    limit=None,
     seed=1,
     a_min=1500.0,
     a_max=8000.0,
@@ -363,7 +363,7 @@ def run_robust_fit_suite(
     ups_bul=0.5,
     law="simple_nu",
     score="median",
-    ups_ranges=((0.05, 1.5), (0.01, 2.0)),
+    ups_ranges=(0.01, 2.0),
 ):
   files = list_rotmod_files(data_dir, limit=limit, seed=seed)
 
@@ -466,7 +466,7 @@ if __name__ == "__main__":
     run_robust_fit_suite(
         data_dir=data_dir,
         limit=80,
-        seed=1,
+        seed=4,
         a_min=1500.0,
         a_max=8000.0,
         ngrid=120,
