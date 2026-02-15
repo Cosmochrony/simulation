@@ -353,19 +353,125 @@ def plot_3panel(
     print(f"Saved: {outfile}")
 
 
+def run_robust_fit_suite(
+    data_dir,
+    limit=80,
+    seed=1,
+    a_min=1500.0,
+    a_max=8000.0,
+    ngrid=120,
+    ups_bul=0.5,
+    law="simple_nu",
+    score="median",
+    ups_ranges=((0.05, 1.5), (0.01, 2.0)),
+):
+  files = list_rotmod_files(data_dir, limit=limit, seed=seed)
+
+  for ups_min, ups_max in ups_ranges:
+    # Local helper: same as summarize_sample but with custom ups bounds
+    def redchi2_for_file_bounds(path, a_star):
+      r, vobs, ev, vgas, vdisk, vbul = load_rotmod(path)
+      ups, red = fit_ups_disk(
+        r,
+        vobs,
+        ev,
+        vgas,
+        vdisk,
+        vbul,
+        ups_bul=ups_bul,
+        a_star=a_star,
+        law=law,
+        ups_min=ups_min,
+        ups_max=ups_max,
+        ngrid=600,
+      )
+      filename = os.path.basename(path)
+      name = filename.replace("_rotmod.dat", "")
+      return name, filename, ups, red
+
+    # Robust fit for a_star with bounds-aware chi2 evaluation
+    a_grid = np.linspace(a_min, a_max, ngrid)
+    scores = np.empty_like(a_grid)
+
+    for i, a_star in enumerate(a_grid):
+      vals = []
+      for path in files:
+        try:
+          _, _, _, red = redchi2_for_file_bounds(path, a_star=a_star)
+        except Exception:
+          continue
+        if np.isfinite(red):
+          vals.append(red)
+
+      if not vals:
+        scores[i] = np.inf
+        continue
+
+      v = np.array(vals, dtype=float)
+      if score == "median":
+        scores[i] = float(np.median(v))
+      elif score == "trimmed_mean":
+        v2 = np.sort(v)
+        k = max(int(0.1 * len(v2)), 0)
+        v2 = v2[k:len(v2) - k] if len(v2) - 2 * k >= 5 else v2
+        scores[i] = float(np.mean(v2))
+      else:
+        raise ValueError(f"Unknown score: {score}")
+
+    best_i = int(np.argmin(scores))
+    best_a = float(a_grid[best_i])
+    best_score = float(scores[best_i])
+
+    rows = []
+    skipped = 0
+    for path in files:
+      try:
+        name, filename, ups, red = redchi2_for_file_bounds(path, a_star=best_a)
+        rows.append((name, filename, ups, red))
+      except Exception:
+        skipped += 1
+
+    rows = [r for r in rows if np.isfinite(r[3])]
+    reds = np.array([r[3] for r in rows], dtype=float)
+    upss = np.array([r[2] for r in rows], dtype=float)
+
+    med = float(np.median(reds))
+    p16 = float(np.percentile(reds, 16))
+    p84 = float(np.percentile(reds, 84))
+    frac5 = float(np.mean(reds < 5.0))
+    frac10 = float(np.mean(reds < 10.0))
+
+    eps = 1e-9
+    frac_ups_min = float(np.mean(upss <= (ups_min + eps)))
+    frac_ups_max = float(np.mean(upss >= (ups_max - eps)))
+
+    print("")
+    print("=" * 72)
+    print(f"Law: {law}   score: {score}")
+    print(f"ups range: [{ups_min}, {ups_max}]   ups_bul={ups_bul}")
+    print(f"Best global a_star (robust): {best_a:.1f}   score={best_score:.2f}")
+    print(f"N = {len(rows)} galaxies  (skipped={skipped})")
+    print(f"red chi2 median = {med:.2f}   (P16={p16:.2f}, P84={p84:.2f})")
+    print(f"fraction red chi2 < 5:  {frac5:.2%}")
+    print(f"fraction red chi2 < 10: {frac10:.2%}")
+    print(f"fraction ups at min ({ups_min}): {frac_ups_min:.2%}")
+    print(f"fraction ups at max ({ups_max}): {frac_ups_max:.2%}")
+    print("=" * 72)
+
+  return files
+
 if __name__ == "__main__":
     data_dir = "../data/Rotmod_LTG/"
-    files = list_rotmod_files(data_dir, limit=80, seed=1)
 
-    best_a, best_score = fit_global_a_star_robust(
-        files=files,
+    run_robust_fit_suite(
+        data_dir=data_dir,
+        limit=80,
+        seed=1,
         a_min=1500.0,
         a_max=8000.0,
         ngrid=120,
         ups_bul=0.5,
         law="simple_nu",
         score="median",
+        ups_ranges=((0.05, 1.5), (0.01, 2.0)),
     )
-    print(f"Best global a_star (robust): {best_a:.1f}   score={best_score:.2f}")
-
-    summarize_sample(files, a_star=best_a, ups_bul=0.5, law="simple_nu", topk=10)
