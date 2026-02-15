@@ -472,6 +472,6 @@ if __name__ == "__main__":
         ngrid=120,
         ups_bul=0.5,
         law="simple_nu",
-        score="median",
+        score="trimmed_mean",
         ups_ranges=((0.05, 1.5), (0.01, 2.0)),
     )
