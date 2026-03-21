@@ -556,7 +556,7 @@ try:
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    os.makedirs('figures', exist_ok=True)
+    os.makedirs('../figures', exist_ok=True)
     plt.rcParams.update({'font.size': 11})
 
     # --- Figure 1: Admissibility envelope on Q8 ---

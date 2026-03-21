@@ -22,10 +22,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from spectral_relaxation_lib import (
-    lam_support, km_density, km_cdf, normalised_levels,
-    reading_A, reading_B, exit_p_exact,
-    ADE_CASES, SM_RATIOS
+from spectral.relaxation.spectral_relaxation_lib import (
+  lam_support, km_density, km_cdf, normalised_levels,
+  reading_A, reading_B, ADE_CASES, SM_RATIOS
 )
 
 # Global style
