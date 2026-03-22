@@ -276,9 +276,11 @@ def make_fig_variance(q_list, all_depths, all_sigma_mean, all_sigma_var):
     for q, depths, sm, sv, col in zip(q_list, all_depths, all_sigma_mean,
                                       all_sigma_var, COLORS):
         mask  = (depths >= 1) & (sm > 1e-5)
-        ratio = np.where(sm > 1e-10, sv / sm**2, np.nan)
-        ax.plot(depths[mask], ratio[mask], color=col, linewidth=1.2,
-                label=r"$q=%d$" % q)
+        d_m   = depths[mask]
+        sm_m  = sm[mask]
+        sv_m  = sv[mask]
+        ratio = sv_m / sm_m**2
+        ax.plot(d_m, ratio, color=col, linewidth=1.2, label=r"$q=%d$" % q)
     ax.axhline(1.0, color="red", linestyle="--", linewidth=0.9,
                label=r"$\varepsilon=1$ (B2)")
     ax.set_xlabel("BFS depth $n$", fontsize=9)
