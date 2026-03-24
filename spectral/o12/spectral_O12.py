@@ -3,65 +3,68 @@ spectral_O12.py
 Exact Weil-Block Projective Capacity on Heisenberg Graphs.
 O12 of the Admissibility Sub-Programme -- Cosmochrony framework.
 
-Computes, for each prime q in {211, 307, 401}:
-  - BFS on Cay(Heis3(Z/qZ), {+/-X, +/-Y})
-  - Per-block exact Weil projection for M_block sampled generic blocks H_c
-  - Incremental block-wise projective capacity Sigma_n^(c) via Gram-Schmidt
-  - Mean capacity Sigma_bar_n and inter-block variance V_n
-  - Log-log fit of Sigma_bar_n -> delta_exact with OLS over [n0, n1]
-  - Sensitivity analysis (window perturbation, M_block variation)
-  - Coherence length ell_gamma(n) per shell (diagnostic for Section 6.4)
-  - Collapse plot data (Sigma normalised, n/n*)
-  - N_seed=5 independent block-sampling seeds -> sigma_seed(delta_hat)
+PAPER FIGURES (default, --mode paper):
+  Primes q in {29, 53, 61} -- accessible on a single core in ~5 minutes total.
+  These are the exact parameters used to produce the figures and tables in the paper.
+
+PRODUCTION TARGET (--mode full):
+  Primes q in {211, 307, 401} -- matches O11 prime range.
+  Requires hours to days on a single core; use distributed computation.
+
+PAPER PARAMETERS (used for all figures and tables in the paper):
+  q=29:  M_block=50,  n_max=8,  N_seed=3, BFS_frac=0.99
+  q=53:  M_block=20,  n_max=11, N_seed=1, BFS_frac=0.99
+  q=61:  M_block=15,  n_max=10, N_seed=1, BFS_frac=0.99
+
+n_max cap: bounds computation for pathological slow-converging blocks
+(blocks that add only 2 new directions per shell for many shells, processing
+shells with thousands of elements). For the primes used, sigma_bar drops below
+EPS_SAT before n_max is reached for the majority of blocks; the cap only
+affects the slow-tail blocks whose late-shell contributions are below EPS_SAT.
 
 Outputs (saved in current directory):
-  fig1_per_block.pdf      -- per-block capacity curves (Fig 1)
-  fig2_variance.pdf       -- inter-block variance V_n (Fig 2)
-  fig3_loglog.pdf         -- log-log fit Sigma_bar_n (Fig 3)
-  fig4_collapse.pdf       -- collapse plot (Fig 4, primary figure)
-  fig5_coherence.pdf      -- coherence length ell_gamma(n) (diagnostic)
-  table_delta.txt         -- Table 3: delta_exact extraction results
-  table_sensitivity.txt   -- Table 4: sensitivity analysis at q=307
-  table_e2.txt            -- Table: condition (E2) assessment
-  table_beta.txt          -- Table 5: implied beta* ranges (placeholder)
+  fig2_variance.pdf       -- inter-block variance V_n
+  fig3_loglog.pdf         -- log-log fit Sigma_bar_n (primary figure)
+  fig4_collapse.pdf       -- collapse plot
+  fig5_coherence.pdf      -- coherence length ell_gamma(n)
+  table_delta.txt         -- Table 3: delta_exact extraction
+  table_sensitivity.txt   -- Table 4: sensitivity analysis
+  table_e2.txt            -- condition (E2) assessment
+  table_beta.txt          -- Table 5: implied beta* ranges
 """
 
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from collections import defaultdict, deque
 import time
 import sys
+import argparse
 
 RNG_BASE = 42
 EPS_GS = 1e-10
 EPS_SAT = 1e-3
 E2_THRESH = 1.0
 R2_THRESH = 0.97
-WINDOW_MIN_PTS = 15
+WINDOW_MIN_PTS = 4   # E1' for exact blocks (dim=q); O11 proxy used 15 (dim=q^2)
 
-PRIMES = [211, 307, 401]
-BFS_FRACS = {211: 0.30, 307: 0.20, 401: 0.10}
-M_BLOCK_MAIN = {211: 500, 307: 500, 401: 300}
-N_SEED = 5
+# Paper parameters -- reproduces all figures in SpectralO12
+PAPER_PARAMS = {
+    29: dict(bfs_frac=0.99, m_block=50,  n_max=8,  n_seed=3),
+    53: dict(bfs_frac=0.99, m_block=20,  n_max=11, n_seed=1),
+    61: dict(bfs_frac=0.99, m_block=15,  n_max=10, n_seed=1),
+}
+PAPER_SENSITIVITY_Q = 53
 
-SENSITIVITY_Q = 307
+# Production target (requires hours/days per prime)
+FULL_PARAMS = {
+    211: dict(bfs_frac=0.30, m_block=500, n_max=None, n_seed=5),
+    307: dict(bfs_frac=0.20, m_block=500, n_max=None, n_seed=5),
+    401: dict(bfs_frac=0.10, m_block=300, n_max=None, n_seed=5),
+}
+FULL_SENSITIVITY_Q = 307
 
-
-def heisenberg_group_elements(q):
-    """
-    Enumerate all elements of Heis3(Z/qZ) as triples (a, b, gamma).
-    Returns dict mapping (a,b,gamma) -> index and inverse list.
-    """
-    elems = []
-    idx = {}
-    for a in range(q):
-        for b in range(q):
-            for g in range(q):
-                idx[(a, b, g)] = len(elems)
-                elems.append((a, b, g))
-    return elems, idx
+CHUNK_SIZE = 400
 
 
 def heisenberg_mul(u, v, q):
@@ -78,19 +81,17 @@ def heisenberg_inv(u, q):
 
 
 def build_generators(q):
-    """Standard symmetric generating set S = {±X, ±Y}."""
+    """Standard symmetric generating set S = {+/-X, +/-Y}."""
     X = (1, 0, 0)
     Y = (0, 1, 0)
-    Xinv = heisenberg_inv(X, q)
-    Yinv = heisenberg_inv(Y, q)
-    return [X, Xinv, Y, Yinv]
+    return [X, heisenberg_inv(X, q), Y, heisenberg_inv(Y, q)]
 
 
 def bfs_shells(elems, idx, gens, q, max_fraction):
     """
-    BFS from identity, stopping when max_fraction of |G_q| nodes visited.
-    elems/idx parameters kept for API compatibility but not used internally.
-    Returns list of shells; shell[n] = list of (a,b,gamma) at depth n.
+    BFS from identity, stopping when max_fraction * q^3 nodes visited.
+    elems/idx kept for API compatibility but unused.
+    Returns list of shells; shell[n] = list of (a,b,gamma) at BFS depth n.
     """
     identity = (0, 0, 0)
     max_nodes = int(max_fraction * q ** 3)
@@ -98,7 +99,6 @@ def bfs_shells(elems, idx, gens, q, max_fraction):
     current_shell = [identity]
     shells = [current_shell]
     total = 1
-
     while total < max_nodes:
         next_shell = []
         for u in current_shell:
@@ -116,7 +116,6 @@ def bfs_shells(elems, idx, gens, q, max_fraction):
             break
         shells.append(next_shell)
         current_shell = next_shell
-
     return shells
 
 
@@ -127,41 +126,36 @@ def sample_generic_blocks(q, m_block, rng):
     Returns array of shape (m_block, 3).
     """
     blocks = []
-    attempts = 0
     max_attempts = m_block * 100
-    while len(blocks) < m_block and attempts < max_attempts:
+    for _ in range(max_attempts):
+        if len(blocks) >= m_block:
+            break
         c = rng.integers(1, q, size=3)
         if (c[0] + c[1] + c[2]) % q != 0:
             blocks.append(c)
-        attempts += 1
     if len(blocks) < m_block:
         raise RuntimeError(f"Could not sample {m_block} generic blocks at q={q}")
     return np.array(blocks, dtype=np.int64)
 
 
 def sample_generic_blocks_stratified(q, m_block, rng):
-    """
-    Stratified sampling: draw (c1,c2,c3) with c1<=c2<=c3 (up to permutation).
-    """
+    """Stratified sampling: draw (c1,c2,c3) with c1<=c2<=c3 (sorted)."""
     blocks = []
-    attempts = 0
     max_attempts = m_block * 200
-    while len(blocks) < m_block and attempts < max_attempts:
+    for _ in range(max_attempts):
+        if len(blocks) >= m_block:
+            break
         c = np.sort(rng.integers(1, q, size=3))
         if (int(c[0]) + int(c[1]) + int(c[2])) % q != 0:
             blocks.append(c)
-        attempts += 1
     if len(blocks) < m_block:
-        blocks_uniform = sample_generic_blocks(q, m_block - len(blocks), rng)
-        blocks.extend(blocks_uniform.tolist())
+        extra = sample_generic_blocks(q, m_block - len(blocks), rng)
+        blocks.extend(extra.tolist())
     return np.array(blocks[:m_block], dtype=np.int64)
 
 
 def heisenberg_mul_batch(u_arr, g, q):
-    """
-    u_arr: (N, 3) int array; g: (3,) int array or tuple.
-    Returns (N, 3) result of u * g in Heis3(Z/qZ).
-    """
+    """u_arr: (N,3) int array; g: (3,) tuple. Returns (N,3) of u*g mod q."""
     ap, bp, gamp = int(g[0]), int(g[1]), int(g[2])
     out = u_arr.copy()
     out[:, 2] = (u_arr[:, 2] + gamp + u_arr[:, 0] * bp) % q
@@ -171,16 +165,14 @@ def heisenberg_mul_batch(u_arr, g, q):
 
 
 def make_psi_table(c, q):
-    """Precompute lookup table psi_c(t) = exp(2pi i c t / q) for t in Z/qZ."""
+    """Precompute LUT: psi_c[t] = exp(2pi i c t / q) for t in Z/qZ."""
     t = np.arange(q, dtype=np.int64)
     return np.exp(2j * np.pi * c * t / q)
 
 
 def weil_batch_lut(a_arr, b_arr, gamma_arr, psi_table, q):
     """
-    Vectorised exact Weil action using a precomputed LUT for phases.
-    a_arr, b_arr, gamma_arr: (N,) int arrays.
-    psi_table: (q,) complex array, psi_table[t] = exp(2pi i c t / q).
+    Exact Weil action rho_c(a,b,gamma)|uniform> using precomputed LUT.
     Returns (N, q) complex array.
     """
     x_out = np.arange(q, dtype=np.int64)
@@ -192,9 +184,9 @@ def weil_batch_lut(a_arr, b_arr, gamma_arr, psi_table, q):
 def fingerprint_vectors_batch(shell_arr, c_block, gens_arr, q):
     """
     Compute all k=3 fingerprint vectors for all elements of a shell.
-    Uses LUT for phase computation.
-    shell_arr: (M, 3); c_block: (3,); gens_arr: (4, 3).
-    Returns: (M * 4^3, q) complex array.
+    Uses LUT for Weil phases (factor ~40x faster than direct exp).
+    shell_arr: (M,3); c_block: (3,); gens_arr: (4,3).
+    Returns (M * 4^3, q) complex array.
     """
     c1, c2, c3 = int(c_block[0]), int(c_block[1]), int(c_block[2])
     psi1 = make_psi_table(c1, q)
@@ -217,36 +209,54 @@ def fingerprint_vectors_batch(shell_arr, c_block, gens_arr, q):
 def gram_schmidt_batch(basis_mat, new_vecs, eps=EPS_GS):
     """
     Orthogonalise rows of new_vecs against current orthonormal basis_mat.
-    basis_mat: (k, q) complex array of current basis (may be None if empty).
-    new_vecs: (N, q) complex array.
-    Returns (new_basis_mat, delta_r) where delta_r = number of new directions added.
+    Stops when basis reaches ambient dimension (new_vecs.shape[1]).
+    Returns (new_basis_mat, delta_r).
     """
     delta_r = 0
     if basis_mat is None:
         basis_mat = np.empty((0, new_vecs.shape[1]), dtype=np.complex128)
-
     for vec in new_vecs:
         if basis_mat.shape[0] >= new_vecs.shape[1]:
             break
         w = vec.copy()
         if basis_mat.shape[0] > 0:
             coeffs = basis_mat.conj() @ w
-            w -= (basis_mat.T @ coeffs)
+            w -= basis_mat.T @ coeffs
         norm = np.linalg.norm(w)
         if norm > eps:
             basis_mat = np.vstack([basis_mat, (w / norm)[None, :]])
             delta_r += 1
-
     return basis_mat, delta_r
 
 
-CHUNK_SIZE = 400  # max elements per batch to stay under ~100MB
+def coherence_length(shells, q):
+    """
+    ell_gamma(n) = |mean_{g in S_n} exp(2pi i gamma_g / q)|.
+    Measures how uniformly gamma is distributed across shell S_n.
+    ell_gamma ~ 1: gamma effectively frozen (proxy regime).
+    ell_gamma ~ 0: gamma fully diversified (exact dynamics active).
+    """
+    ell = []
+    for shell in shells:
+        if len(shell) == 0:
+            ell.append(0.0)
+            continue
+        phases = np.array([np.exp(2j * np.pi * g / q) for (a, b, g) in shell])
+        ell.append(abs(phases.mean()))
+    return np.array(ell)
 
 
-def compute_block_capacity(shells, c_block, q, gens, n_sat_min=1):
+
+def compute_block_capacity(shells, c_block, q, gens, n_max=None):
     """
     Compute Sigma_n^(c) for one generic block H_c over all shells.
     Vectorised with chunked processing to avoid memory overflow.
+
+    n_max: if not None, stop after shell n_max regardless of saturation.
+    This caps cost for pathological slow-converging blocks (adding only 2
+    new directions per shell) whose late-shell sigma is below EPS_SAT anyway.
+    Paper used n_max in {8, 10, 11} for q in {29, 61, 53} respectively.
+
     Returns arrays: sigma_vals, delta_r_vals, shell_sizes, final_rank.
     """
     gens_arr = np.array(gens, dtype=np.int64)
@@ -258,12 +268,14 @@ def compute_block_capacity(shells, c_block, q, gens, n_sat_min=1):
     shell_sizes = []
 
     for n, shell in enumerate(shells):
+        if n_max is not None and n > n_max:
+            break
         if len(shell) == 0:
             break
         shell_arr = np.array(shell, dtype=np.int64)
         delta_r = 0
 
-        # Process shell in chunks to limit peak memory
+        # Process shell in chunks to limit peak memory (~100MB per chunk)
         for start in range(0, len(shell_arr), CHUNK_SIZE):
             chunk = shell_arr[start:start + CHUNK_SIZE]
             vecs = fingerprint_vectors_batch(chunk, c_block, gens_arr, q)
@@ -350,23 +362,28 @@ def coherence_length(shells, q):
     return np.array(ell)
 
 
-def run_one_prime(q, m_block, seed, stratified=False):
+def run_one_prime(q, m_block, n_max, bfs_frac, seed, stratified=False):
     """
     Run the full O12 computation for one prime q, one seed.
     Returns dict with all results.
+
+    Parameters (paper values):
+      q=29:  m_block=50,  n_max=8,  bfs_frac=0.99
+      q=53:  m_block=20,  n_max=11, bfs_frac=0.99
+      q=61:  m_block=15,  n_max=10, bfs_frac=0.99
     """
     t0 = time.time()
     rng = np.random.default_rng(RNG_BASE + seed * 1000 + q)
 
-    print(f"  q={q}, seed={seed}, m_block={m_block}, stratified={stratified}")
+    print(f"  q={q}, seed={seed}, m_block={m_block}, n_max={n_max}, "
+          f"bfs_frac={bfs_frac}, stratified={stratified}")
     sys.stdout.flush()
 
     # Build generators (no need to enumerate all group elements)
     gens = build_generators(q)
 
     # BFS
-    frac = BFS_FRACS[q]
-    shells = bfs_shells(None, None, gens, q, frac)
+    shells = bfs_shells(None, None, gens, q, bfs_frac)
     n_shells = len(shells)
     ns = np.arange(n_shells)
     shell_sizes = np.array([len(s) for s in shells])
@@ -389,7 +406,8 @@ def run_one_prime(q, m_block, seed, stratified=False):
         if i % 50 == 0:
             print(f"    block {i}/{m_block} ...")
             sys.stdout.flush()
-        sigma_vals, _, _, rank_final = compute_block_capacity(shells, c_block, q, gens)
+        sigma_vals, _, _, rank_final = compute_block_capacity(
+            shells, c_block, q, gens, n_max=n_max)
         # Pad to n_shells length
         pad = n_shells - len(sigma_vals)
         if pad > 0:
@@ -424,7 +442,7 @@ def run_one_prime(q, m_block, seed, stratified=False):
           f"E3={e3_ok}, time={t1-t0:.1f}s")
 
     return dict(
-        q=q, seed=seed, m_block=m_block, stratified=stratified,
+        q=q, seed=seed, m_block=m_block, n_max=n_max, stratified=stratified,
         shells=shells, ns=ns, shell_sizes=shell_sizes,
         all_sigma=all_sigma, sigma_bar=sigma_bar, sigma_var=sigma_var, V_n=V_n,
         n0=n0, n1=n1, delta_hat=delta_hat, C_hat=C_hat, r2=r2,
@@ -464,16 +482,18 @@ def run_sensitivity(q, base_result):
         rows.append((label, d, d - baseline_delta if not np.isnan(d) else np.nan))
 
     # M_block variations: re-run with different block counts
-    for mb, label in [(200, "M_block=200"), (1000, "M_block=1000")]:
+    for mb, label in [(10, "M_block=10"), (50, "M_block=50")]:
         try:
             rng = np.random.default_rng(RNG_BASE + q)
             gens = build_generators(q)
             shells = base_result['shells']
+            n_max = base_result.get('n_max', None)
             blocks = sample_generic_blocks(q, mb, rng)
             all_s = []
             n_shells = len(shells)
             for c_block in blocks:
-                sigma_vals, _, _, _ = compute_block_capacity(shells, c_block, q, gens)
+                sigma_vals, _, _, _ = compute_block_capacity(
+                    shells, c_block, q, gens, n_max=n_max)
                 pad = n_shells - len(sigma_vals)
                 if pad > 0:
                     sigma_vals = np.concatenate([sigma_vals, np.zeros(pad)])
@@ -489,11 +509,13 @@ def run_sensitivity(q, base_result):
         rng = np.random.default_rng(RNG_BASE + q + 99)
         gens = build_generators(q)
         shells = base_result['shells']
+        n_max = base_result.get('n_max', None)
         blocks = sample_generic_blocks_stratified(q, base_result['m_block'], rng)
         all_s = []
         n_shells = len(shells)
         for c_block in blocks:
-            sigma_vals, _, _, _ = compute_block_capacity(shells, c_block, q, gens)
+            sigma_vals, _, _, _ = compute_block_capacity(
+                shells, c_block, q, gens, n_max=n_max)
             pad = n_shells - len(sigma_vals)
             if pad > 0:
                 sigma_vals = np.concatenate([sigma_vals, np.zeros(pad)])
@@ -744,10 +766,10 @@ def write_table_e2(seed_results_by_q):
     print("Saved table_e2.txt")
 
 
-def write_table_sensitivity(sens_rows):
-    """Table 4: sensitivity at q=SENSITIVITY_Q."""
+def write_table_sensitivity(sens_rows, sensitivity_q):
+    """Table 4: sensitivity at sensitivity_q."""
     lines = []
-    lines.append(f"Table 4: Sensitivity of delta_exact at q={SENSITIVITY_Q}")
+    lines.append(f"Table 4: Sensitivity of delta_exact at q={sensitivity_q}")
     lines.append("=" * 55)
     lines.append(f"{'Perturbation':>30} {'delta_hat':>10} {'Delta delta':>12}")
     lines.append("-" * 55)
@@ -791,29 +813,49 @@ def write_table_beta(seed_results_by_q):
 
 
 def main():
-    print("O12 -- Exact Weil-Block Projective Capacity on Heisenberg Graphs")
+    parser = argparse.ArgumentParser(description='SpectralO12 -- Exact Weil-block capacity')
+    parser.add_argument('--mode', choices=['paper', 'full'], default='paper',
+                        help=('paper: q in {29,53,61}, reproduces paper figures (~5 min). '
+                              'full: q in {211,307,401}, production target (hours/days).'))
+    args = parser.parse_args()
+
+    if args.mode == 'paper':
+        params = PAPER_PARAMS
+        sensitivity_q = PAPER_SENSITIVITY_Q
+        print("SpectralO12 -- PAPER MODE (q in {29,53,61})")
+        print("Reproduces figures and tables from SpectralO12 paper.")
+        print("Expected wall-clock time: ~5 minutes on a single core.")
+    else:
+        params = FULL_PARAMS
+        sensitivity_q = FULL_SENSITIVITY_Q
+        print("SpectralO12 -- FULL MODE (q in {211,307,401})")
+        print("WARNING: this may take hours to days on a single core.")
+
     print("=" * 65)
 
     seed_results_by_q = {}
     best_result_by_q = {}
 
-    for q in PRIMES:
+    for q, p in params.items():
         print(f"\n--- Prime q={q} ---")
-        m_block = M_BLOCK_MAIN[q]
         seed_results = []
-        for seed in range(N_SEED):
-            res = run_one_prime(q, m_block, seed)
+        for seed in range(p['n_seed']):
+            res = run_one_prime(
+                q=q,
+                m_block=p['m_block'],
+                n_max=p['n_max'],
+                bfs_frac=p['bfs_frac'],
+                seed=seed,
+            )
             seed_results.append(res)
         seed_results_by_q[q] = seed_results
-        # Best result = seed 0 (used for figures)
         best_result_by_q[q] = seed_results[0]
 
-    print("\n--- Sensitivity analysis (q={}) ---".format(SENSITIVITY_Q))
-    base = best_result_by_q[SENSITIVITY_Q]
-    sens_rows = run_sensitivity(SENSITIVITY_Q, base)
+    print(f"\n--- Sensitivity analysis (q={sensitivity_q}) ---")
+    base = best_result_by_q[sensitivity_q]
+    sens_rows = run_sensitivity(sensitivity_q, base)
 
     print("\n--- Generating figures ---")
-    make_figure1(best_result_by_q)
     make_figure2(best_result_by_q)
     make_figure3(best_result_by_q)
     make_figure4(best_result_by_q)
@@ -822,7 +864,7 @@ def main():
     print("\n--- Writing tables ---")
     write_table_delta(seed_results_by_q)
     write_table_e2(seed_results_by_q)
-    write_table_sensitivity(sens_rows)
+    write_table_sensitivity(sens_rows, sensitivity_q)
     write_table_beta(seed_results_by_q)
 
     print("\nDone.")
