@@ -1,0 +1,106 @@
+O13 Pre-Benchmark Report
+=================================================================
+
+q = 29  (M=50, n_max=8, bfs_frac=0.99)
+  delta_hat  = 4.4157
+  R2         = 0.9978
+  window     = [2,5], 4 pts
+  V_n max    = 5.198  (E2: violated)
+  t/block    = 0.06s
+  t_blocks   = 2.8s
+
+q = 61  (M=15, n_max=10, bfs_frac=0.99)
+  delta_hat  = 4.7986
+  R2         = 0.9926
+  window     = [2,7], 6 pts
+  V_n max    = 2.750  (E2: violated)
+  t/block    = 0.67s
+  t_blocks   = 10.1s
+
+q = 101  (M=20, n_max=20, bfs_frac=0.99)
+  delta_hat  = 4.5145
+  R2         = 0.9957
+  window     = [3,10], 8 pts
+  V_n max    = 1.600  (E2: violated)
+  t/block    = 8.99s
+  t_blocks   = 179.9s
+
+q = 151  (M=10, n_max=37, bfs_frac=0.29044851349903034)
+  delta_hat  = 4.2666
+  R2         = 0.9927
+  window     = [3,12], 10 pts
+  V_n max    = 0.653  (E2: OK)
+  t/block    = 167.09s
+  t_blocks   = 1670.9s
+
+q = 211  (M=10, n_max=50, bfs_frac=0.10645170802297782)
+  delta_hat  = 3.5885
+  R2         = 0.9964
+  window     = [3,13], 11 pts
+  V_n max    = 0.302  (E2: OK)
+  t/block    = 642.67s
+  t_blocks   = 6426.7s
+
+
+Cost extrapolation (anchor: q=211, 642.67s/block, T ~ q^5)
+------------------------------------------------------------------------------
+    q        |Gq|    t/block(s)     M=5 (s)    M=10 (s)    M=20 (s)
+------------------------------------------------------------------------------
+   29       24145          0.06           0           1           1  [measured]
+   61      224711          0.67           3           7          13  [measured]
+  101     1019997          8.99          45          90         180  [measured]
+  151     1000000        167.09         835        1671        3342  [measured]
+  211     1000000        642.67        3213        6427       12853  [measured]
+  307    28934443        4190.5       20952       41905       83810  [extrap.]
+
+=================================================================
+  O13 BENCHMARK DECISION SUMMARY
+=================================================================
+
+  q = 29
+    delta_hat = 4.416 (O12 range: 4.28-4.80),  R2 = 0.9978
+    Q1 [M=20 < 1h]:         YES  (1s est.)
+    Q2 [window >= 5 pts]:   MARGINAL  (4 pts, [2,5])
+    Q3 [Vn < 1.0]:          MEAN_ONLY (E2 viol.)  (Vmax = 5.20)
+    Q4 [q=151 M=20 < 2h]:   YES
+
+  q = 61
+    delta_hat = 4.799 (O12 range: 4.28-4.80),  R2 = 0.9926
+    Q1 [M=20 < 1h]:         YES  (13s est.)
+    Q2 [window >= 5 pts]:   YES  (6 pts, [2,7])
+    Q3 [Vn < 1.0]:          MEAN_ONLY (E2 viol.)  (Vmax = 2.75)
+    Q4 [q=151 M=20 < 2h]:   YES
+
+  q = 101
+    delta_hat = 4.515 (O12 range: 4.28-4.80),  R2 = 0.9957
+    Q1 [M=20 < 1h]:         YES  (180s est.)
+    Q2 [window >= 5 pts]:   YES  (8 pts, [3,10])
+    Q3 [Vn < 1.0]:          MEAN_ONLY (E2 viol.)  (Vmax = 1.60)
+    Q4 [q=151 M=20 < 2h]:   YES
+
+  q = 151
+    delta_hat = 4.267 (O12 range: 4.28-4.80),  R2 = 0.9927
+    Q1 [M=20 < 1h]:         YES  (3342s est.)
+    Q2 [window >= 5 pts]:   YES  (10 pts, [3,12])
+    Q3 [Vn < 1.0]:          YES (E2 sat.)  (Vmax = 0.65)
+    Q4 [q=151 M=20 < 2h]:   YES
+
+  q = 211
+    delta_hat = 3.588 (O12 range: 4.28-4.80),  R2 = 0.9964
+    Q1 [M=20 < 1h]:         BORDERLINE  (12853s est.)
+    Q2 [window >= 5 pts]:   YES  (11 pts, [3,13])
+    Q3 [Vn < 1.0]:          YES (E2 sat.)  (Vmax = 0.30)
+    Q4 [q=151 M=20 < 2h]:   YES
+
+=================================================================
+  EDITORIAL RECOMMENDATION:
+  O13-A (asymptotic regime) is VIABLE.
+  Recommended O13 scope:
+    - q in {101, 151} with M_block = 20 if available
+    - q=211 with M_block = 5--10 as a robustness extension
+    - report delta_exact(q) convergence plot as primary result
+    - fit scaling law delta(q) = delta_inf + a/q^alpha
+  If delta_exact(q) remains flat (no drift toward [7.4,10.6]),
+  O13 becomes a transition paper: convergence of delta_exact,
+  robust tension, and motivation for O14.
+=================================================================
