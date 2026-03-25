@@ -59,8 +59,8 @@ BETA_STAR_HI = 0.13
 ETA_BENCHMARK = 0.5   # [H3] benchmark only
 
 # --- Pipeline configuration ---
-USE_PIPELINE = False
-PIPELINE_DATA_PATH = None   # set to directory containing O12/O13 BFS outputs
+USE_PIPELINE = True
+PIPELINE_DATA_PATH = "o14_pipeline"   # set to directory containing O12/O13 BFS outputs
 
 
 # ===========================================================================
