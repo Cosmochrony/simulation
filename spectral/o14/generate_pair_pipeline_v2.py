@@ -164,14 +164,16 @@ def process_prime(q, n_pairs, out_dir, rng):
         cum_c   = reconstruct_cumspan(sigma_diff_c,   sz)
         cum_qmc = reconstruct_cumspan(sigma_diff_qmc, sz)
 
-        # sigma normalise
-        sigma_c_norm   = cum_c.astype(float)   / q
-        sigma_qmc_norm = cum_qmc.astype(float) / q
-        sigma_pair     = sigma_c_norm * sigma_qmc_norm
+        # Observable residuel decroissant : R_c(n) = (q - Sigma_c(n)) / q
+        # Analogue direct de all_sigma dans les fichiers O12/O14.
+        resid_c   = np.clip(q - cum_c,   0, q).astype(float) / q
+        resid_qmc = np.clip(q - cum_qmc, 0, q).astype(float) / q
+        sigma_pair = resid_c * resid_qmc
 
-        # Increment du span pair (pour detection des stabilisations)
-        delta_cum      = np.diff(cum_c + cum_qmc, prepend=0).astype(float)
-        delta_cum      = np.clip(delta_cum, 0, None)
+        # Decrements (positifs) pour detection des stabilisations
+        delta_cum = -np.diff(resid_c + resid_qmc,
+                             prepend=float(resid_c[0]+resid_qmc[0]))
+        delta_cum = np.clip(delta_cum, 0, None)
 
         # Fenetre de fit et delta_pair
         n0, n1 = find_fitting_window(ns_loc[1:], sigma_pair[1:], q)
