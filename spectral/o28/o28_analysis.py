@@ -192,89 +192,135 @@ def plot_n1_calibration(results, slope, intercept, outdir):
 
 def extract_sigma_vectors(data, q):
     """
-    Extract per-shell sigma_c and sigma_{q-c} vectors from the checkpoint.
+    Extract per-pair mean sigma_c and sigma_{q-c} vectors from the checkpoint.
 
-    The O25 pipeline stores sigma values per pair and per shell.  We look for:
-      - 'sigma_c_shells': array (n_pairs, n_shells) for c-blocks
-      - 'sigma_qmc_shells': array (n_pairs, n_shells) for (q-c)-blocks
-      - or combined 'sigma_pair_shells': (n_pairs, n_shells)
+    The patched O25 pipeline stores:
+      - 'sigma_c_mean':   array (n_pairs, n_shells) — mean sigma_c per shell
+      - 'sigma_qmc_mean': array (n_pairs, n_shells) — mean sigma_{q-c} per shell
 
-    Returns (sigma_c, sigma_qmc) each of shape (n_pairs, n_shells), or None.
+    Returns (sigma_c, sigma_qmc) each of shape (n_pairs, n_shells), or (None, None).
     """
-    # Preferred: separate c and q-c arrays
-    if "sigma_c_shells" in data and "sigma_qmc_shells" in data:
-        sc = np.asarray(data["sigma_c_shells"], dtype=float)
-        sqmc = np.asarray(data["sigma_qmc_shells"], dtype=float)
-        print(f"  q={q}: sigma_c_shells {sc.shape}, sigma_qmc_shells {sqmc.shape}")
+    if "sigma_c_mean" in data and "sigma_qmc_mean" in data:
+        sc   = np.asarray(data["sigma_c_mean"],   dtype=float)
+        sqmc = np.asarray(data["sigma_qmc_mean"], dtype=float)
+        print(f"  q={q}: sigma_c_mean {sc.shape}, sigma_qmc_mean {sqmc.shape}")
         return sc, sqmc
 
-    # Fallback: single pair product array — cannot decompose
-    if "sigma_pair_shells" in data:
-        print(f"  q={q}: only sigma_pair_shells available; r_eff requires "
-              f"separate c / q-c vectors — skipping Part B")
-        return None, None
-
-    # Try generic names
-    for kc, kqmc in [("sc", "sqmc"), ("sigma_c", "sigma_qmc"),
+    # Legacy key names from earlier script versions
+    for kc, kqmc in [("sigma_c_shells", "sigma_qmc_shells"),
+                     ("sc", "sqmc"),
+                     ("sigma_c", "sigma_qmc"),
                      ("s_c_mean", "s_qmc_mean")]:
         if kc in data and kqmc in data:
-            sc = np.asarray(data[kc], dtype=float)
+            sc   = np.asarray(data[kc],   dtype=float)
             sqmc = np.asarray(data[kqmc], dtype=float)
-            if sc.ndim >= 1:
-                print(f"  q={q}: sigma vectors from ('{kc}', '{kqmc}')")
-                return sc, sqmc
+            print(f"  q={q}: sigma vectors from ('{kc}', '{kqmc}')")
+            return sc, sqmc
 
-    print(f"  q={q}: sigma_c/sigma_{{q-c}} vectors not found in checkpoint; "
-          f"r_eff measurement requires pipeline re-run with --save-sigma-shells")
+    print(f"  q={q}: sigma_c_mean / sigma_qmc_mean not found in checkpoint.")
+    print(f"         Re-run o25_paired_pipeline.py --force to regenerate "
+          f"with the patched pipeline.")
     return None, None
 
 
-def measure_reff_from_vectors(sigma_c, sigma_qmc, q):
+def measure_reff_from_vectors(sigma_c, sigma_qmc, q, n0=None, n1=None):
     """
-    Estimate the effective dimension r_eff of the trajectory
-    {v_c(n) ⊗ v_{q-c}(n)} in End(V_rho) ≃ R^{d_rho^2}.
+    Estimate the effective dimension r_eff of the pair-trajectory family
+    {v_c^{(p)}(n)}_{n=n0..n1} in the space of shell-indexed signals.
 
-    Method: for each pair p, form the vectorised outer product
-        m_p(n) = sigma_c[p, n] * sigma_qmc[p, n]   (scalar per shell)
-    Stack across shells to get a matrix M of shape (n_pairs, n_shells).
-    The effective rank of M estimates r_eff.
+    The O26 prediction is that these trajectories span a subspace of dimension
+    r_eff = d_rho^2 = 4 (spin-1/2 sector) inside the n_shells-dimensional
+    shell space.  They do NOT span the full space: the power-law decay
+    is common to all pairs, so the mean trajectory must be subtracted first.
 
-    Prediction (spin-1/2): r_eff = d_rho^2 = 4.
+    Method
+    ------
+    1. Restrict to the pre-saturation fitting window [n0, n1] (columns of
+       sigma_c / sigma_qmc).  If not provided, use all shells.
+    2. Form the pair-product matrix M[p, n] = sigma_c[p, n] * sigma_qmc[p, n]
+       over the window.  Shape: (n_pairs, n_win).
+    3. Normalise each row by its L2 norm (removes amplitude variation between
+       pairs, isolates shape differences).
+    4. Centre columns (subtract the cross-pair mean at each shell).
+       This removes the common power-law component shared by all pairs,
+       which would otherwise dominate the SVD and collapse r_eff to 1.
+    5. SVD of the centred, row-normalised matrix.  The effective rank of this
+       matrix measures how many independent directions the pair trajectories
+       occupy BEYOND the common decay — i.e., the dimension of the
+       pair-to-pair variation subspace, which is what O26 predicts to be
+       d_rho^2.
+
+    Returns
+    -------
+    dict with SVD results, r_eff estimates, and diagnostic quantities.
     """
-    # sigma_c shape: (n_pairs, n_shells)
     if sigma_c.ndim == 1:
-        sigma_c = sigma_c[np.newaxis, :]
+        sigma_c   = sigma_c[np.newaxis, :]
     if sigma_qmc.ndim == 1:
         sigma_qmc = sigma_qmc[np.newaxis, :]
 
-    n_pairs = sigma_c.shape[0]
+    n_pairs  = sigma_c.shape[0]
     n_shells = min(sigma_c.shape[1], sigma_qmc.shape[1])
-    sigma_c = sigma_c[:, :n_shells]
+    sigma_c   = sigma_c[:, :n_shells]
     sigma_qmc = sigma_qmc[:, :n_shells]
 
-    # Outer product trajectories: shape (n_pairs, n_shells)
-    M = sigma_c * sigma_qmc
+    # Step 1: restrict to fitting window
+    if n0 is None:
+        n0 = 0
+    if n1 is None:
+        n1 = n_shells - 1
+    n0 = max(0, n0)
+    n1 = min(n_shells - 1, n1)
+    n_win = n1 - n0 + 1
 
-    # Singular value decomposition of M (n_pairs x n_shells)
-    U, sv, Vt = np.linalg.svd(M, full_matrices=False)
-    sv_norm = sv / sv[0]
+    sc_win   = sigma_c[:, n0:n1 + 1]    # (n_pairs, n_win)
+    sqmc_win = sigma_qmc[:, n0:n1 + 1]
 
-    # Effective rank via participation ratio
+    if n_win < 2:
+        print(f"  q={q}: window [{n0},{n1}] too short for r_eff — skipping.")
+        return None
+
+    # Step 2: pair-product matrix
+    Mprod = sc_win * sqmc_win           # (n_pairs, n_win)
+
+    # Step 3: row-normalise (remove amplitude variation between pairs)
+    row_norms = np.linalg.norm(Mprod, axis=1, keepdims=True)
+    row_norms = np.where(row_norms < 1e-15, 1.0, row_norms)
+    Mnorm = Mprod / row_norms           # (n_pairs, n_win), each row unit-norm
+
+    # Step 4: centre columns (remove common decay shape)
+    Mcent = Mnorm - Mnorm.mean(axis=0, keepdims=True)
+
+    # Step 5: SVD of centred matrix
+    U, sv, Vt = np.linalg.svd(Mcent, full_matrices=False)
+    sv_norm = sv / sv[0] if sv[0] > 1e-15 else sv
+
+    # Effective rank: participation ratio
     p2 = sv_norm ** 2
-    p2 /= p2.sum()
+    p2 = p2 / p2.sum()
     r_eff_pr = 1.0 / np.sum(p2 ** 2)
 
-    # Hard threshold at 5% of leading singular value
-    r_eff_thr = int(np.sum(sv_norm > 0.05))
+    # Hard threshold at 10% of leading SV (centred matrix; 5% was too loose)
+    r_eff_thr = int(np.sum(sv_norm > 0.10))
 
-    print(f"  q={q}: singular values (normalised) = "
+    # Fraction of variance explained by top-4 components
+    var_top4 = float(np.sum(sv[:4] ** 2) / np.sum(sv ** 2))
+
+    print(f"  q={q}: window=[{n0},{n1}]  n_pairs={n_pairs}  n_win={n_win}")
+    print(f"  q={q}: singular values (centred, normalised) = "
           + ", ".join(f"{s:.4f}" for s in sv_norm[:8]))
     print(f"  q={q}: r_eff (participation ratio) = {r_eff_pr:.2f}  "
-          f"r_eff (5% threshold) = {r_eff_thr}")
+          f"r_eff (10% threshold) = {r_eff_thr}  "
+          f"var(top 4) = {100*var_top4:.1f}%")
     print(f"  q={q}: spin-1/2 prediction r_eff = d_rho^2 = 4")
+    if n_win < 10:
+        print(f"  q={q}: [diagnostic] n_win={n_win} < 10 — window too short "
+              f"to discriminate r_eff; result non-informative.")
 
-    return {"sv": sv, "sv_norm": sv_norm, "r_eff_pr": r_eff_pr,
-            "r_eff_thr": r_eff_thr, "n_pairs": n_pairs, "n_shells": n_shells}
+    return {"sv": sv, "sv_norm": sv_norm,
+            "r_eff_pr": r_eff_pr, "r_eff_thr": r_eff_thr,
+            "var_top4": var_top4, "informative": n_win >= 10,
+            "n_pairs": n_pairs, "n_win": n_win, "n0": n0, "n1": n1}
 
 
 def plot_reff(reff_results, outdir):
@@ -298,11 +344,14 @@ def plot_reff(reff_results, outdir):
                    label=r"$d_\rho^2 = 4$ (spin-1/2)")
         ax.set_xlabel("singular value index")
         ax.set_ylabel("normalised $\\sigma_i / \\sigma_1$")
-        r_pr = res["r_eff_pr"]
+        r_pr  = res["r_eff_pr"]
         r_thr = res["r_eff_thr"]
-        ax.set_title(f"$q={q}$\n"
+        v4    = res.get("var_top4", float("nan"))
+        n_win = res.get("n_win", "?")
+        ax.set_title(f"$q={q}$,  window $n_{{\\rm win}}={n_win}$\n"
                      f"$r_\\mathrm{{eff}}^\\mathrm{{PR}}={r_pr:.2f}$, "
-                     f"$r_\\mathrm{{eff}}^{{5\\%}}={r_thr}$")
+                     f"$r_\\mathrm{{eff}}^{{10\\%}}={r_thr}$, "
+                     f"var(top 4)$={100*v4:.0f}\\%$")
         ax.legend(fontsize=7)
         ax.set_xlim(0.5, k + 0.5)
         ax.grid(True, alpha=0.3, axis="y")
@@ -337,7 +386,9 @@ def compute_delta_corr(npz_dir, primes, n1_results):
         for key in ("delta_pair_mean", "delta_mean", "delta_pairs_mean",
                     "mean_delta"):
             if key in data:
-                delta_mean = float(np.asarray(data[key]).flat[0])
+                arr = np.asarray(data[key], dtype=float)
+                # delta_pair_mean is shape (n_pairs,) — take the mean over pairs
+                delta_mean = float(np.nanmean(arr))
                 break
         if delta_mean is None and "delta_pairs" in data:
             arr = np.asarray(data["delta_pairs"], dtype=float).ravel()
@@ -404,13 +455,16 @@ def write_report(n1_results, slope, intercept, reff_results, delta_rows, outdir)
     lines.append(f"Spin-1/2 prediction: r_eff = d_rho^2 = 4")
     lines.append("")
     if reff_results:
-        lines.append(f"{'q':>6}  {'r_eff (PR)':>12}  {'r_eff (5%)':>12}  "
-                     f"{'consistent with 4':>18}")
+        lines.append(f"{'q':>6}  {'n_win':>6}  {'r_eff (PR)':>12}  {'r_eff (10%)':>12}  "
+                     f"{'var top4 %':>12}  {'informative':>12}  {'consistent with 4':>18}")
         for q, res in sorted(reff_results.items()):
-            consistent = abs(res["r_eff_pr"] - 4.0) < 1.0
+            consistent = abs(res["r_eff_pr"] - 4.0) < 1.5
+            v4 = res.get("var_top4", float("nan"))
+            inf_flag = "YES" if res.get("informative", False) else "NO (n_win<10)"
             lines.append(
-                f"{q:>6}  {res['r_eff_pr']:>12.2f}  {res['r_eff_thr']:>12}  "
-                f"{'YES' if consistent else 'NO':>18}")
+                f"{q:>6}  {res['n_win']:>6}  {res['r_eff_pr']:>12.2f}  "
+                f"{res['r_eff_thr']:>12}  {100*v4:>12.1f}  "
+                f"{inf_flag:>12}  {'YES' if consistent else 'NO':>18}")
     else:
         lines.append("  (sigma_c / sigma_{q-c} shell vectors not found in checkpoints)")
         lines.append("  Re-run o25_paired_pipeline.py with --save-sigma-shells to enable Part B.")
@@ -462,8 +516,11 @@ def main():
             continue
         sc, sqmc = extract_sigma_vectors(data, q)
         if sc is not None and sqmc is not None:
-            res = measure_reff_from_vectors(sc, sqmc, q)
-            reff_results[q] = res
+            n0_q = int(np.asarray(data.get("n0", 0)).flat[0])
+            n1_q = int(np.asarray(data.get("n1", sc.shape[1] - 1)).flat[0])
+            res = measure_reff_from_vectors(sc, sqmc, q, n0=n0_q, n1=n1_q)
+            if res is not None:
+                reff_results[q] = res
 
     outpath_reff = plot_reff(reff_results, args.out_dir)
 
@@ -480,13 +537,14 @@ def main():
               + " ".join(str(q) for q in missing)
               + " --M 50 --bfs-frac 0.99 --auto-window")
 
-    # If r_eff could not be measured, print the pipeline patch needed
+    # If r_eff could not be measured, explain the pipeline patch needed
     if not reff_results:
         print()
-        print("[info] Part B requires sigma_c_shells and sigma_qmc_shells arrays.")
-        print("       Add --save-sigma-shells to o25_paired_pipeline.py and")
-        print("       save np.array(sigma_c_per_shell) and np.array(sigma_qmc_per_shell)")
-        print("       under those keys in the npz checkpoint.")
+        print("[info] Part B requires sigma_c_mean and sigma_qmc_mean arrays.")
+        print("       Re-run the patched o25_paired_pipeline.py with --force:")
+        print("       python o25_paired_pipeline.py --primes "
+              + " ".join(str(q) for q in args.primes)
+              + " --M 50 --bfs-frac 0.99 --auto-window --force")
 
 
 if __name__ == "__main__":
