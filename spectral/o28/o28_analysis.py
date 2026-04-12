@@ -225,30 +225,39 @@ def extract_sigma_vectors(data, q):
 
 def measure_reff_from_vectors(sigma_c, sigma_qmc, q, n0=None, n1=None):
     """
-    Estimate the effective dimension r_eff of the pair-trajectory family
-    {v_c^{(p)}(n)}_{n=n0..n1} in the space of shell-indexed signals.
+    O28 proxy test for the effective dimension of pair trajectories.
 
-    The O26 prediction is that these trajectories span a subspace of dimension
-    r_eff = d_rho^2 = 4 (spin-1/2 sector) inside the n_shells-dimensional
-    shell space.  They do NOT span the full space: the power-law decay
-    is common to all pairs, so the mean trajectory must be subtracted first.
+    IMPORTANT — scope and limitations
+    -----------------------------------
+    O26 Criterion 5.4 (Test 4) defines r_eff as the numerical rank of the
+    per-pair covariance operator
+        C_c = (1/N) sum_{n=n0}^{n1} vec(M^f_n) vec(M^f_n)^dagger
+    where M^f_n = v^{(n)}_c ⊗ v^{(n)}_{q-c} is the OUTER PRODUCT of the
+    individual Weil fingerprint vectors v^{(n)}_c ∈ C^q.
+    This requires storing the full per-block trajectories (n_pairs, M, n_shells,
+    q), which the current O25 pipeline does not save.
 
-    Method
-    ------
-    1. Restrict to the pre-saturation fitting window [n0, n1] (columns of
-       sigma_c / sigma_qmc).  If not provided, use all shells.
-    2. Form the pair-product matrix M[p, n] = sigma_c[p, n] * sigma_qmc[p, n]
-       over the window.  Shape: (n_pairs, n_win).
-    3. Normalise each row by its L2 norm (removes amplitude variation between
-       pairs, isolates shape differences).
-    4. Centre columns (subtract the cross-pair mean at each shell).
-       This removes the common power-law component shared by all pairs,
-       which would otherwise dominate the SVD and collapse r_eff to 1.
-    5. SVD of the centred, row-normalised matrix.  The effective rank of this
-       matrix measures how many independent directions the pair trajectories
-       occupy BEYOND the common decay — i.e., the dimension of the
-       pair-to-pair variation subspace, which is what O26 predicts to be
-       d_rho^2.
+    The present function implements a PROXY test using only the per-pair mean
+    vectors sigma_c_mean[p, n] and sigma_qmc_mean[p, n] (scalars, not full
+    Weil vectors).  It measures how many independent directions the (n_pairs)
+    mean trajectories span after removing the common power-law decay.
+    This proxy is sensitive to inter-pair geometric diversity but cannot
+    directly measure the rank of C_c in End(V_rho); it is a necessary
+    condition for r_eff > 1, not a sufficient one.
+
+    The exact O26 Test 4 requires a pipeline extension to save per-block
+    sigma_c vectors of shape (n_pairs, M, n_shells) — this is noted in O28
+    as a direction for subsequent work.
+
+    Method (proxy)
+    --------------
+    1. Restrict to the pre-saturation fitting window [n0, n1].
+    2. Form the pair-product matrix M[p, n] = sigma_c[p, n] * sigma_qmc[p, n].
+       Shape: (n_pairs, n_win).
+    3. Row-normalise (removes amplitude variation between pairs).
+    4. Centre columns (removes the common power-law decay shared by all pairs).
+    5. SVD of the centred, row-normalised matrix.  The effective rank measures
+       the number of independent decay-shape directions across pairs.
 
     Returns
     -------
@@ -450,9 +459,14 @@ def write_report(n1_results, slope, intercept, reff_results, delta_rows, outdir)
             f"{row['n1_over_q']:>8.4f}  {row['corr_factor']:>8.4f}  "
             f"{row['delta_corr']:>12.4f}  {'YES' if row['in_window'] else 'NO':>14}")
     lines.append("")
-    lines.append("Part B: Effective dimension r_eff")
+    lines.append("Part B: Inter-pair diversity (proxy for O26 Test 4)")
     lines.append("-" * 40)
-    lines.append(f"Spin-1/2 prediction: r_eff = d_rho^2 = 4")
+    lines.append("Note: O26 Test 4 (Criterion 5.4) requires per-block Weil")
+    lines.append("      vector trajectories (shape n_pairs x M x n_shells x q),")
+    lines.append("      not available in current O25 checkpoints.")
+    lines.append("      The values below measure inter-pair trajectory diversity")
+    lines.append("      (a necessary but not sufficient proxy for r_eff).")
+    lines.append(f"Spin-1/2 prediction (O26): r_eff = d_rho^2 = 4")
     lines.append("")
     if reff_results:
         lines.append(f"{'q':>6}  {'n_win':>6}  {'r_eff (PR)':>12}  {'r_eff (10%)':>12}  "
@@ -508,7 +522,10 @@ def main():
     print("\n=== O28 — Part A (bis): delta_corr with measured n1 ===\n")
     delta_rows = compute_delta_corr(args.npz_dir, args.primes, n1_results)
 
-    print("\n=== O28 — Part B: r_eff measurement ===\n")
+    print("\n=== O28 — Part B: Inter-pair diversity (proxy for O26 Test 4) ===\n")
+    print("  [scope] O26 Criterion 5.4 requires per-block Weil vector trajectories")
+    print("  [scope] not stored in current O25 checkpoints.  Results below are a")
+    print("  [scope] proxy (inter-pair mean trajectory diversity after centering).\n")
     reff_results = {}
     for q in args.primes:
         data = load_o25_npz(args.npz_dir, q)
