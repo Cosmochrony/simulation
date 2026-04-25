@@ -15,8 +15,8 @@ Usage:
     python o28_analysis.py --npz-dir /path/to/checkpoints --primes 29 61 101 151 211
 
 Output:
-    o28_n1_calibration.png
-    o28_reff_measurement.png
+    o28_n1_calibration.pdf
+    o28_reff_measurement.pdf
     o28_results.txt
 """
 
@@ -31,7 +31,7 @@ from scipy import stats
 # ---------------------------------------------------------------------------
 # Parameters
 # ---------------------------------------------------------------------------
-DEFAULT_PRIMES = [29, 61, 101, 151]
+DEFAULT_PRIMES = [29, 61, 101, 151, 211]
 ETA = 0.5          # O14 normalisation exponent
 ADMISSIBLE_LO = 7.4
 ADMISSIBLE_HI = 10.6
@@ -142,48 +142,93 @@ def calibrate_n1_over_q(npz_dir, primes):
     return results, slope, intercept
 
 
-def plot_n1_calibration(results, slope, intercept, outdir):
-    qs = np.array(sorted(results.keys()), dtype=float)
+def plot_n1_calibration(results, slope, intercept, outdir, delta_rows=None):
+    qs  = np.array(sorted(results.keys()), dtype=float)
+    n1s = np.array([results[int(q)]["n1"] for q in qs])
     ratios = np.array([results[int(q)]["ratio"] for q in qs])
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    n_panels = 3 if delta_rows else 2
+    fig, axes = plt.subplots(1, n_panels, figsize=(5.5 * n_panels, 4.5))
 
-    # Panel A: n1 vs q with linear fit
+    COLOR_OBS  = "#2c7bb6"
+    COLOR_FIT  = "#333333"
+    COLOR_CORR = "#d7191c"
+    COLOR_RAW  = "#bdbdbd"
+    COLOR_WIN  = "#31a354"
+
+    # Panel (a): n1 vs q with OLS fit and 95%% CI band
     ax = axes[0]
-    ax.scatter(qs, [results[int(q)]["n1"] for q in qs], color="steelblue",
-               zorder=5, label="observed $n_1(q)$")
     if slope is not None:
-        q_fit = np.linspace(qs.min() * 0.9, qs.max() * 1.1, 200)
-        ax.plot(q_fit, slope * q_fit + intercept, "k--",
-                label=rf"fit: $n_1 = {slope:.3f}\,q + {intercept:.1f}$")
+        n = len(qs)
+        _, _, _, _, se = stats.linregress(qs, n1s)
+        t_crit = stats.t.ppf(0.975, df=n - 2)
+        ci = t_crit * se
+        q_fit = np.linspace(qs.min() * 0.88, qs.max() * 1.08, 300)
+        ax.plot(q_fit, slope * q_fit + intercept, "--", color=COLOR_FIT, lw=1.4,
+                label=rf"OLS: $n_1 = {slope:.4f}\,q + {intercept:.2f}$")
+        ax.fill_between(q_fit,
+                        (slope - ci) * q_fit + intercept,
+                        (slope + ci) * q_fit + intercept,
+                        alpha=0.15, color=COLOR_FIT, label="95\%% CI on slope")
+    ax.scatter(qs, n1s, color=COLOR_OBS, zorder=5, s=50, label="$n_1(q)$ (O25)")
+    for q, n1 in zip(qs, n1s):
+        ax.annotate(f"$q={int(q)}$", (q, n1), textcoords="offset points",
+                    xytext=(5, 4), fontsize=8)
     ax.set_xlabel("prime $q$")
     ax.set_ylabel("$n_1(q)$")
-    ax.set_title("BFS window depth $n_1(q)$")
+    ax.set_title("(a) BFS window depth $n_1(q)$")
     ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(direction="in")
 
-    # Panel B: n1/q ratio
+    # Panel (b): n1/q convergence with labels
     ax = axes[1]
-    ax.scatter(qs, ratios, color="darkorange", zorder=5)
     if slope is not None:
-        ax.axhline(slope, color="k", linestyle="--",
-                   label=rf"OLS slope $\hat\alpha = {slope:.4f}$")
+        ax.axhline(slope, color=COLOR_FIT, linestyle="--", lw=1.2,
+                   label=rf"OLS slope $\hat{{\alpha}} = {slope:.4f}$")
+        ax.axhspan(slope - ci, slope + ci, alpha=0.12, color=COLOR_FIT)
+    ax.scatter(qs, ratios, color=COLOR_OBS, zorder=5, s=50, label="$n_1(q)/q$")
+    for q, r in zip(qs, ratios):
+        ax.annotate(f"{r:.3f}", (q, r), textcoords="offset points",
+                    xytext=(5, 4), fontsize=8)
     ax.set_xlabel("prime $q$")
     ax.set_ylabel("$n_1(q)/q$")
-    ax.set_title("Convergence of $n_1(q)/q$")
+    ax.set_title("(b) Convergence of $n_1(q)/q$")
     ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.25)
+    ax.tick_params(direction="in")
 
-    for ax in axes:
+    # Panel (c): raw vs O14-corrected delta_pair
+    if delta_rows:
+        ax = axes[2]
+        dqs   = np.array([r["q"]              for r in delta_rows], dtype=float)
+        dbars = np.array([r["delta_pair_mean"] for r in delta_rows])
+        dstds = np.array([r["delta_pair_std"]  for r in delta_rows])
+        dcorr = np.array([r["delta_corr"]      for r in delta_rows])
+        ax.axhspan(ADMISSIBLE_LO, ADMISSIBLE_HI, alpha=0.12, color=COLOR_WIN,
+                   label=f"admissible $[{ADMISSIBLE_LO},{ADMISSIBLE_HI}]$")
+        ax.errorbar(dqs, dbars, yerr=dstds, fmt="o", color=COLOR_RAW,
+                    capsize=4, lw=1.2, label=r"$\bar{\delta}_{\rm pair}$ (raw)")
+        ax.plot(dqs, dcorr, "s--", color=COLOR_CORR, markersize=7, lw=1.4,
+                label=r"$\delta_{\rm corr}$ (O14-corrected)")
+        for q, dc in zip(dqs, dcorr):
+            ax.annotate(f"{dc:.2f}", (q, dc), textcoords="offset points",
+                        xytext=(5, 3), fontsize=8, color=COLOR_CORR)
+        ax.set_xlabel("prime $q$")
+        ax.set_ylabel(r"$\delta_{\rm pair}$")
+        ax.set_title(r"(c) Raw vs corrected $\delta_{\rm pair}$")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.25)
         ax.tick_params(direction="in")
 
-    fig.suptitle("O28 — Part A: BFS window depth calibration", fontsize=11)
+    fig.suptitle("O28 \u2014 Part A: BFS window depth calibration", fontsize=11)
     fig.tight_layout()
-    outpath = os.path.join(outdir, "o28_n1_calibration.png")
-    fig.savefig(outpath, dpi=150, bbox_inches="tight")
+    outpath = os.path.join(outdir, "o28_n1_calibration.pdf")
+    fig.savefig(outpath, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved {outpath}")
     return outpath
+
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +414,7 @@ def plot_reff(reff_results, outdir):
     fig.suptitle(r"O28 — Part B: Effective dimension $r_\mathrm{eff}$ "
                  r"of trajectory in $\mathrm{End}(V_\rho)$", fontsize=11)
     fig.tight_layout()
-    outpath = os.path.join(outdir, "o28_reff_measurement.png")
+    outpath = os.path.join(outdir, "o28_reff_measurement.pdf")
     fig.savefig(outpath, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved {outpath}")
@@ -382,8 +427,9 @@ def plot_reff(reff_results, outdir):
 
 def compute_delta_corr(npz_dir, primes, n1_results):
     """
-    Recompute delta_corr(q) = delta_pair_mean * eta * log(q) / log(n1(q))
+    Recompute delta_corr(q) = delta_pair_mean - eta * log(q) / log(n1(q))
     using the measured n1 values.
+    Also extracts delta_pair_std for error bars.
     """
     rows = []
     for q in sorted(primes):
@@ -406,16 +452,25 @@ def compute_delta_corr(npz_dir, primes, n1_results):
             print(f"  q={q}: delta_pair_mean not found in checkpoint")
             continue
 
+        delta_std = None
+        for key in ("delta_pair_mean", "delta_mean", "delta_pairs_mean", "mean_delta"):
+            if key in data:
+                delta_std = float(np.nanstd(np.asarray(data[key], dtype=float)))
+                break
+        if delta_std is None and "delta_pairs" in data:
+            delta_std = float(np.nanstd(np.asarray(data["delta_pairs"], dtype=float).ravel()))
+
         n1 = n1_results.get(q, {}).get("n1")
         if n1 is None or n1 <= 1:
             continue
 
         corr_factor = ETA * np.log(q) / np.log(n1)
-        delta_corr = delta_mean * corr_factor
+        delta_corr = delta_mean - corr_factor
         in_window = ADMISSIBLE_LO <= delta_corr <= ADMISSIBLE_HI
         rows.append({
             "q": q,
             "delta_pair_mean": delta_mean,
+            "delta_pair_std": delta_std if delta_std is not None else 0.0,
             "n1": n1,
             "n1_over_q": n1 / q,
             "corr_factor": corr_factor,
@@ -515,12 +570,13 @@ def main():
     print("\n=== O28 — Part A: BFS window depth calibration ===\n")
     n1_results, slope, intercept = calibrate_n1_over_q(args.npz_dir, args.primes)
 
-    outpath_n1 = None
-    if n1_results:
-        outpath_n1 = plot_n1_calibration(n1_results, slope, intercept, args.out_dir)
-
     print("\n=== O28 — Part A (bis): delta_corr with measured n1 ===\n")
     delta_rows = compute_delta_corr(args.npz_dir, args.primes, n1_results)
+
+    outpath_n1 = None
+    if n1_results:
+        outpath_n1 = plot_n1_calibration(n1_results, slope, intercept, args.out_dir,
+                                         delta_rows=delta_rows)
 
     print("\n=== O28 — Part B: Inter-pair diversity (proxy for O26 Test 4) ===\n")
     print("  [scope] O26 Criterion 5.4 requires per-block Weil vector trajectories")
