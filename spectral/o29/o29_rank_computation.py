@@ -395,7 +395,8 @@ def make_plot(results, path, threshold_rel):
         pct = 100 * (ra == 3).mean()
         ax1.scatter(np.arange(1, n + 1) + offsets[q], ra,
                     color=_colour(q), marker=_marker(q), s=20, alpha=0.75, zorder=3,
-                    label=f"$q={q}$  ({int(pct):d}\\% with $r_{{\\rm eff}}=3$)")
+                    label=f"$q={q}$  ({int(pct):d}\\% with $r_{{\\rm eff}}=3$)"
+                          + (" [multi-sample confirmed]" if q == 101 else ""))
 
     ax1.axhline(3, color="forestgreen", linewidth=1.5, linestyle="--", zorder=2,
                 label=r"$r_{\rm eff}=3$, $d_\rho=2$ (spin-1/2)")
