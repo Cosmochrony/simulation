@@ -362,6 +362,21 @@ COLOURS = {61: "#2166ac", 101: "#d6604d", 151: "#1a9641",
 MARKERS = {61: "o", 101: "s", 151: "^", 29: "D", 211: "v", 307: "p", 401: "h"}
 
 
+def _load_multisample(checkpoint_dir, q, pair_results):
+    import os
+    raw_pct = 100 * sum(r['reff_A'] == 3 for r in pair_results) / len(pair_results)
+    path = os.path.join(checkpoint_dir, f'o29_multisample_q{q}.npz')
+    if not os.path.isfile(path):
+        return raw_pct, None, False
+    ms = np.load(path, allow_pickle=True)
+    ms_modal = {(int(c), int(qmc)): int(m)
+                for (c, qmc), m in zip(ms['pairs'], ms['reff_modal'])}
+    M = int(ms['M'])
+    confirmed = sum(ms_modal.get((r['c'], r['qmc']), r['reff_A']) == 3
+                    for r in pair_results)
+    return 100 * confirmed / len(pair_results), M, True
+
+
 def _colour(q):
     return COLOURS.get(q, "#333333")
 
@@ -370,7 +385,7 @@ def _marker(q):
     return MARKERS.get(q, "x")
 
 
-def make_plot(results, path, threshold_rel):
+def make_plot(results, path, threshold_rel, checkpoint_dir='.'):
     """
     Two-panel figure:
       (a) reff_A per conjugate pair for all primes
@@ -392,11 +407,12 @@ def make_plot(results, path, threshold_rel):
         pr  = results[q]
         ra  = np.array([r["reff_A"] for r in pr])
         n   = len(ra)
-        pct = 100 * (ra == 3).mean()
+        pct, ms_M, is_ms = _load_multisample(checkpoint_dir, q, pr)
+        ms_tag = f" [multi-sample confirmed, $M={ms_M}$]" if is_ms else ""
         ax1.scatter(np.arange(1, n + 1) + offsets[q], ra,
                     color=_colour(q), marker=_marker(q), s=20, alpha=0.75, zorder=3,
                     label=f"$q={q}$  ({int(pct):d}\\% with $r_{{\\rm eff}}=3$)"
-                          + (" [multi-sample confirmed]" if q == 101 else ""))
+                          + ms_tag)
 
     ax1.axhline(3, color="forestgreen", linewidth=1.5, linestyle="--", zorder=2,
                 label=r"$r_{\rm eff}=3$, $d_\rho=2$ (spin-1/2)")
@@ -551,22 +567,25 @@ def main():
     np.savez(os.path.join(out_dir, "o29_results.npz"), **save_dict)
     print(f"Results saved: {os.path.join(out_dir, 'o29_results.npz')}")
 
-    make_plot(results, os.path.join(out_dir, "o29_rank_plot.pdf"), args.threshold)
+    make_plot(results, os.path.join(out_dir, "o29_rank_plot.pdf"), args.threshold,
+              checkpoint_dir=args.checkpoint_dir)
 
     print("\n" + "="*60 + "\nFINAL VERDICT\n" + "="*60)
     all_confirmed = True
     for q, pr in sorted(results.items()):
         rA  = set(r["reff_A"] for r in pr)
         d   = {r["d_rho"] for r in pr if r["d_rho"]}
-        pct_3 = 100 * sum(r["reff_A"] == 3 for r in pr) / len(pr)
+        pct_eff, ms_M, is_ms = _load_multisample(args.checkpoint_dir, q, pr)
+        ms_note = f" [multi-sample confirmed, M={ms_M}]" if is_ms else ""
         if rA == {3} and d == {2}:
             status = "spin-1/2 CONFIRMED (d_rho=2, symmetric rank formula)"
         elif d == {2}:
-            status = f"spin-1/2 CONFIRMED for {pct_3:.0f}% of pairs (d_rho=2)"
+            status = (f"spin-1/2 CONFIRMED for {pct_eff:.0f}% of pairs"
+                      f" (d_rho=2){ms_note}")
         else:
             status = f"mixed: reff_A={rA}, d_rho={d}"
             all_confirmed = False
-        print(f"  q={q:4d}: reff_A={rA}  d_rho={d}  ({pct_3:.0f}% pairs reff=3)  {status}")
+        print(f"  q={q:4d}: reff_A={rA}  d_rho={d}  ({pct_eff:.0f}% pairs reff=3)  {status}")
     print()
     print("  Primary result: reff = 3 in End(H_eff) identifies d_rho = 2 (spin-1/2)")
     print("  via the symmetric rank formula reff = d_rho*(d_rho+1)/2.")
