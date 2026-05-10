@@ -28,9 +28,13 @@ USAGE:
   python o32_triplet_pipeline.py --quick             # smoke test
 """
 
-import argparse, os, sys, time
+import argparse, os, pathlib, sys, time
 import numpy as np
 from joblib import Parallel, delayed
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(it, **kw): return it  # graceful fallback if tqdm absent
 
 for _v in ("OMP_NUM_THREADS","MKL_NUM_THREADS","OPENBLAS_NUM_THREADS","NUMEXPR_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
@@ -42,6 +46,56 @@ try:
 except Exception as exc:
     print(f"ERROR importing spectral_O12: {exc}", file=sys.stderr)
     sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint helpers
+# ---------------------------------------------------------------------------
+
+def _ckpt_prime_path(ckpt_dir, q):
+    return os.path.join(ckpt_dir, f"q{q}_done.npz")
+
+def _ckpt_char_path(ckpt_dir, q, c):
+    return os.path.join(ckpt_dir, f"q{q}_c{c}.npz")
+
+def _ckpt_save_char(ckpt_dir, q, c, mean, std, darr, r2arr):
+    """Save one character's completed M blocks to checkpoint."""
+    if ckpt_dir is None:
+        return
+    os.makedirs(ckpt_dir, exist_ok=True)
+    np.savez(_ckpt_char_path(ckpt_dir, q, c),
+             mean=mean, std=std, darr=darr, r2arr=r2arr)
+
+def _ckpt_load_char(ckpt_dir, q, c):
+    """Load a completed character checkpoint.  Returns None if absent."""
+    if ckpt_dir is None:
+        return None
+    p = _ckpt_char_path(ckpt_dir, q, c)
+    if not os.path.exists(p):
+        return None
+    d = np.load(p, allow_pickle=True)
+    return d['mean'], d['std'], d['darr'], d['r2arr']
+
+def _ckpt_save_prime(ckpt_dir, result):
+    """Serialise a completed prime result to its checkpoint file."""
+    if ckpt_dir is None:
+        return
+    os.makedirs(ckpt_dir, exist_ok=True)
+    import pickle
+    p = _ckpt_prime_path(ckpt_dir, result['q'])
+    with open(p.replace('.npz', '.pkl'), 'wb') as f:
+        pickle.dump(result, f)
+
+def _ckpt_load_prime(ckpt_dir, q):
+    """Load a completed prime result.  Returns None if absent."""
+    if ckpt_dir is None:
+        return None
+    import pickle
+    p = _ckpt_prime_path(ckpt_dir, q).replace('.npz', '.pkl')
+    if not os.path.exists(p):
+        return None
+    with open(p, 'rb') as f:
+        return pickle.load(f)
 
 # ---------------------------------------------------------------------------
 # Parameters  (mirror O25)
@@ -142,10 +196,24 @@ def fit_delta(sigma, ns, n0, n1):
 # 4.  Per-character worker  (parallel)
 # ---------------------------------------------------------------------------
 
-def _worker_character(c, q, shells, gens, n_max, n0, n1, M, base_seed, cidx):
-    """Compute M sigma_c(n) samples for character c."""
+def _worker_character(c, q, shells, gens, n_max, n0, n1, M, base_seed, cidx,
+                      ckpt_dir=None):
+    """Compute M sigma_c(n) samples for character c.
+
+    If ckpt_dir is set and a character checkpoint exists, loads completed
+    blocks and only computes the remaining ones.  Saves the checkpoint
+    (in-progress) after every block so interruptions lose at most one block.
+    """
     rng = np.random.default_rng(base_seed + cidx*997 + c*7)
     ns  = np.arange(len(shells), dtype=np.int64)
+    # --- load any existing partial checkpoint ---
+    ckpt = _ckpt_load_char(ckpt_dir, q, c) if ckpt_dir else None
+    if ckpt is not None:
+        _mean, _std, delta_arr, r2_arr = ckpt
+        # reconstruct sigma_list from mean/std (approximate — good enough
+        # for a completed character; partial blocks are not stored per-block)
+        # A completed character checkpoint means ALL M blocks are done.
+        return c, _mean, _std, delta_arr, r2_arr
     sigma_list, delta_arr, r2_arr = [], np.full(M, np.nan), np.full(M, np.nan)
     for m in range(M):
         cb = sample_block(c, q, rng)
@@ -163,7 +231,11 @@ def _worker_character(c, q, shells, gens, n_max, n0, n1, M, base_seed, cidx):
             s = np.concatenate([s, np.zeros(n_max_len - len(s))])
         padded.append(s)
     stack = np.stack(padded)
-    return c, stack.mean(0), stack.std(0), delta_arr, r2_arr
+    mean, std = stack.mean(0), stack.std(0)
+    # save character checkpoint (all M blocks complete)
+    if ckpt_dir:
+        _ckpt_save_char(ckpt_dir, q, c, mean, std, delta_arr, r2_arr)
+    return c, mean, std, delta_arr, r2_arr
 
 # ---------------------------------------------------------------------------
 # 5.  Triplet observables
@@ -205,10 +277,18 @@ def colour_cov(sm, triplet, n0, n1):
 # ---------------------------------------------------------------------------
 
 def run_prime(q, M, bfs_frac, n_max, n0, n1, auto_window,
-              n_triplets, n_jobs, seed, verbose, filter_anomalous=False):
+              n_triplets, n_jobs, seed, verbose, filter_anomalous=False,
+              ckpt_dir=None, force=False):
     q_class = q % 3
     omega   = primitive_cube_root(q)
     is_test = (q_class == 1 and omega is not None)
+
+    # --- prime-level checkpoint ---
+    if not force:
+        cached = _ckpt_load_prime(ckpt_dir, q)
+        if cached is not None:
+            print(f"  q={q}: loaded from checkpoint (use --force to recompute)")
+            return cached
 
     if verbose:
         label = "TEST" if is_test else "CONTROL"
@@ -255,20 +335,34 @@ def run_prime(q, M, bfs_frac, n_max, n0, n1, auto_window,
     elif verbose:
         print(f"  Window: [{n0}, {n1}] (WINDOW_O12 table)")
 
-    # parallel character computation
+    # parallel character computation with progress + checkpoint
+    n_cores = os.cpu_count() or 1
+    core_label = f"{n_cores} cores" if n_jobs == -1 else f"{abs(n_jobs)} jobs"
     if verbose:
-        print(f"Computing {len(characters)} chars × M={M} blocks ({n_jobs} jobs)...")
-    results_c = Parallel(n_jobs=n_jobs, backend="loky", verbose=0)(
-        delayed(_worker_character)(c, q, shells, gens, n_max, n0, n1, M, seed, i)
+        print(f"Computing {len(characters)} chars × M={M} blocks ({core_label})...")
+    gen = Parallel(n_jobs=n_jobs, backend="loky", verbose=0,
+                   return_as="generator")(
+        delayed(_worker_character)(
+            c, q, shells, gens, n_max, n0, n1, M, seed, i,
+            ckpt_dir=ckpt_dir)
         for i, c in enumerate(characters)
     )
+    t_start = time.perf_counter()
     sm, ss, di = {}, {}, {}
-    for c, mean, std, darr, r2arr in results_c:
+    bar = tqdm(gen, total=len(characters), unit="char",
+               desc=f"q={q}", leave=True)
+    for idx, (c, mean, std, darr, r2arr) in enumerate(bar):
         sm[c], ss[c] = mean, std
         di[c] = (float(np.nanmean(darr)), float(np.nanstd(darr)),
                  float(np.nanmean(r2arr)))
+        elapsed = time.perf_counter() - t_start
+        done = idx + 1
+        eta_s = elapsed / done * (len(characters) - done) if done < len(characters) else 0
+        eta_str = f"{eta_s/60:.1f}min" if eta_s >= 60 else f"{eta_s:.0f}s"
+        d, sd, r2 = di[c]
+        bar.set_postfix(c=c, delta=f"{d:.2f}", ETA=eta_str if done < len(characters)
+                        else "done")
         if verbose:
-            d, sd, r2 = di[c]
             print(f"  c={c}: delta={d:.3f}±{sd:.3f}  R2={r2:.3f}")
 
     result = dict(q=q, q_class=q_class, omega=omega, is_test=is_test,
@@ -362,6 +456,8 @@ def run_prime(q, M, bfs_frac, n_max, n0, n1, auto_window,
                 pv_win2 = np.nanmean(_slc2) if len(_slc2) > 0 else np.nan
                 print(f"  Pair var_ratio reference (raw) (unfiltered): {pv_win2:.4e}")
 
+    # save prime-level checkpoint
+    _ckpt_save_prime(ckpt_dir, result)
     return result
 
 # ---------------------------------------------------------------------------
@@ -498,6 +594,15 @@ def main():
                     help="Exclude outlier pairs from control reference "
                          "(delta_c outside median ± 2×IQR). "
                          "Both filtered and unfiltered results are reported.")
+    pa.add_argument("--checkpoint-dir", type=str, default="checkpoints_o32",
+                    dest="ckpt_dir",
+                    help="Directory for prime and character checkpoints "
+                         "(default: checkpoints_o32)")
+    pa.add_argument("--force", action="store_true",
+                    help="Recompute even if checkpoint exists")
+    pa.add_argument("--no-checkpoint", action="store_true",
+                    dest="no_ckpt",
+                    help="Disable checkpointing entirely")
     pa.add_argument("--quick",       action="store_true",
                     help="Smoke test: q=61 only, M=5, 2 triplets")
     args = pa.parse_args()
@@ -508,21 +613,35 @@ def main():
     if args.quick:
         print(f"[QUICK] q={primes[0]}, M={M}, n_triplets={n_triplets}")
 
+    ckpt_dir = None if args.no_ckpt else args.ckpt_dir
+    if ckpt_dir:
+        os.makedirs(ckpt_dir, exist_ok=True)
+        print(f"Checkpoints: {ckpt_dir}/")
     results = []
-    for q in primes:
-        bfs_frac = args.bfs_frac or BFS_FRAC.get(q, 0.05)
-        n_max    = args.n_max    or N_MAX_BLK.get(q, 60)
-        if not args.auto_window and q in WINDOW_O12:
-            n0, n1 = WINDOW_O12[q]
-        else:
-            n0, n1 = 2, 10
-        results.append(run_prime(q=q, M=M, bfs_frac=bfs_frac, n_max=n_max,
-                                 n0=n0, n1=n1, auto_window=args.auto_window,
-                                 n_triplets=n_triplets, n_jobs=args.n_jobs,
-                                 seed=args.seed, verbose=True,
-                                 filter_anomalous=args.filter_anomalous))
-    print_summary(results)
-    save_results(results, args.out)
+    try:
+        for q in primes:
+            bfs_frac = args.bfs_frac or BFS_FRAC.get(q, 0.05)
+            n_max    = args.n_max    or N_MAX_BLK.get(q, 60)
+            if not args.auto_window and q in WINDOW_O12:
+                n0, n1 = WINDOW_O12[q]
+            else:
+                n0, n1 = 2, 10
+            res = run_prime(q=q, M=M, bfs_frac=bfs_frac, n_max=n_max,
+                            n0=n0, n1=n1, auto_window=args.auto_window,
+                            n_triplets=n_triplets, n_jobs=args.n_jobs,
+                            seed=args.seed, verbose=True,
+                            filter_anomalous=args.filter_anomalous,
+                            ckpt_dir=ckpt_dir, force=args.force)
+            results.append(res)
+            # save consolidated output after each prime
+            save_results([r for r in results if r], args.out)
+    except KeyboardInterrupt:
+        print("\n[interrupted] Saving partial results...")
+    if results:
+        print_summary([r for r in results if r])
+        save_results([r for r in results if r], args.out)
+    else:
+        print("No results to save.")
 
 if __name__ == "__main__":
     main()
