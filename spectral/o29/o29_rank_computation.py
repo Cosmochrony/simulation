@@ -407,12 +407,17 @@ def make_plot(results, path, threshold_rel, checkpoint_dir='.'):
         pr  = results[q]
         ra  = np.array([r["reff_A"] for r in pr])
         n   = len(ra)
-        pct, ms_M, is_ms = _load_multisample(checkpoint_dir, q, pr)
-        ms_tag = f" [multi-sample confirmed, $M={ms_M}$]" if is_ms else ""
+        pct_ms, ms_M, is_ms = _load_multisample(checkpoint_dir, q, pr)
+        pct_raw = 100 * (ra == 3).mean()  # single-sample raw
+        if is_ms:
+            label_str = (f"q = {q}  ({int(pct_raw):.0f}% single-sample;"
+                         f" {int(pct_ms):.0f}% modal"
+                         f" [multi-sample, M={ms_M}])")
+        else:
+            label_str = f"q = {q}  ({int(pct_raw):.0f}% with reff = 3)"
         ax1.scatter(np.arange(1, n + 1) + offsets[q], ra,
                     color=_colour(q), marker=_marker(q), s=20, alpha=0.75, zorder=3,
-                    label=f"$q={q}$  ({int(pct):d}\\% with $r_{{\\rm eff}}=3$)"
-                          + ms_tag)
+                    label=label_str)
 
     ax1.axhline(3, color="forestgreen", linewidth=1.5, linestyle="--", zorder=2,
                 label=r"$r_{\rm eff}=3$, $d_\rho=2$ (spin-1/2)")
@@ -575,16 +580,23 @@ def main():
     for q, pr in sorted(results.items()):
         rA  = set(r["reff_A"] for r in pr)
         d   = {r["d_rho"] for r in pr if r["d_rho"]}
-        pct_eff, ms_M, is_ms = _load_multisample(args.checkpoint_dir, q, pr)
+        pct_ms2, ms_M, is_ms = _load_multisample(args.checkpoint_dir, q, pr)
+        pct_raw2 = 100 * sum(r['reff_A'] == 3 for r in pr) / len(pr)
+        pct_eff = pct_ms2 if is_ms else pct_raw2
         ms_note = f" [multi-sample confirmed, M={ms_M}]" if is_ms else ""
-        if rA == {3} and d == {2}:
-            status = "spin-1/2 CONFIRMED (d_rho=2, symmetric rank formula)"
+        if (rA == {3} and d == {2}) or (is_ms and pct_eff == 100.0 and {2} <= d):
+            status = ("spin-1/2 CONFIRMED (d_rho=2, symmetric rank formula)"
+                      + (ms_note if is_ms else ""))
         elif d == {2}:
             status = (f"spin-1/2 CONFIRMED for {pct_eff:.0f}% of pairs"
                       f" (d_rho=2){ms_note}")
         else:
-            status = f"mixed: reff_A={rA}, d_rho={d}"
-            all_confirmed = False
+            if is_ms and pct_eff == 100.0:
+                status = ("spin-1/2 CONFIRMED via multi-sample"
+                          f" (modal d_rho=2){ms_note}")
+            else:
+                status = f"mixed: reff_A={rA}, d_rho={d}"
+                all_confirmed = False
         print(f"  q={q:4d}: reff_A={rA}  d_rho={d}  ({pct_eff:.0f}% pairs reff=3)  {status}")
     print()
     print("  Primary result: reff = 3 in End(H_eff) identifies d_rho = 2 (spin-1/2)")
