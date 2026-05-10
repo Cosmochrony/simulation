@@ -153,8 +153,16 @@ def _worker_character(c, q, shells, gens, n_max, n0, n1, M, base_seed, cidx):
         sigma_list.append(sv)
         d, r2 = fit_delta(sv, ns, n0, min(n1, len(sv)-1))
         delta_arr[m], r2_arr[m] = d, r2
-    n_min  = min(len(s) for s in sigma_list)
-    stack  = np.stack([s[:n_min] for s in sigma_list])
+    # Pad short profiles with zeros (sigma=0 after saturation is physically correct).
+    # Using min-length would let a single outlier block corrupt the mean for the
+    # entire character; zero-padding retains the full pre-saturation window.
+    n_max_len = max(len(s) for s in sigma_list)
+    padded = []
+    for s in sigma_list:
+        if len(s) < n_max_len:
+            s = np.concatenate([s, np.zeros(n_max_len - len(s))])
+        padded.append(s)
+    stack = np.stack(padded)
     return c, stack.mean(0), stack.std(0), delta_arr, r2_arr
 
 # ---------------------------------------------------------------------------
@@ -197,7 +205,7 @@ def colour_cov(sm, triplet, n0, n1):
 # ---------------------------------------------------------------------------
 
 def run_prime(q, M, bfs_frac, n_max, n0, n1, auto_window,
-              n_triplets, n_jobs, seed, verbose):
+              n_triplets, n_jobs, seed, verbose, filter_anomalous=False):
     q_class = q % 3
     omega   = primitive_cube_root(q)
     is_test = (q_class == 1 and omega is not None)
@@ -312,18 +320,47 @@ def run_prime(q, M, bfs_frac, n_max, n0, n1, auto_window,
             print(f"  var_ratio (window) = {win_vr:.4e}  "
                   f"(verdict requires control prime — see summary)")
     else:
-        pv_list = []
+        # --- optional anomaly filter (--filter-anomalous) ---
+        filter_info = None
+        pairs_used  = groups
+        pairs_removed = []
+        if filter_anomalous:
+            pairs_used, pairs_removed, filter_info = filter_anomalous_pairs(
+                groups, di)
+            if verbose:
+                print(f"  Anomaly filter (IQR×{filter_info['iqr_factor']:.1f}): "
+                      f"delta_c ∈ [{filter_info['lo']:.3f}, {filter_info['hi']:.3f}]")
+                print(f"  Pairs KEPT    ({len(pairs_used)}): {pairs_used}")
+                print(f"  Pairs REMOVED ({len(pairs_removed)}): {pairs_removed}")
+                if not pairs_removed:
+                    print(f"  No anomalous pairs detected.")
+        # --- compute variance over kept pairs ---
+        pv_list, pv_list_all = [], []
         for c1, c2 in groups:
             n_c = min(len(sm[c1]), len(sm[c2]))
             stk = np.stack([sm[c1][:n_c], sm[c2][:n_c]])
-            pv_list.append(np.var(stk, axis=0))
-        n_min = min(len(v) for v in pv_list)
-        pv_mean = np.nanmean([v[:n_min] for v in pv_list], axis=0)
-        result['pair_var_mean'] = pv_mean
+            v   = np.var(stk, axis=0)
+            pv_list_all.append(v)
+            if (c1, c2) in pairs_used or (c2, c1) in pairs_used:
+                pv_list.append(v)
+        n_min_all = min(len(v) for v in pv_list_all)
+        n_min     = min(len(v) for v in pv_list) if pv_list else n_min_all
+        pv_mean_all = np.nanmean([v[:n_min_all] for v in pv_list_all], axis=0)
+        pv_mean     = (np.nanmean([v[:n_min] for v in pv_list], axis=0)
+                       if pv_list else pv_mean_all)
+        result['pair_var_mean']     = pv_mean      # used for ctrl_ref
+        result['pair_var_mean_all'] = pv_mean_all  # unfiltered (for paper)
+        result['pairs_removed']     = pairs_removed
+        result['filter_info']       = filter_info
         if verbose:
             _slc = pv_mean[n0:] if len(pv_mean) > n0 else pv_mean
             pv_win = np.nanmean(_slc) if len(_slc) > 0 else np.nan
-            print(f"  Pair var_ratio reference (raw): {pv_win:.4e}")
+            label = "(filtered)" if pairs_removed else "(all pairs)"
+            print(f"  Pair var_ratio reference (raw) {label}: {pv_win:.4e}")
+            if pairs_removed:
+                _slc2 = pv_mean_all[n0:] if len(pv_mean_all) > n0 else pv_mean_all
+                pv_win2 = np.nanmean(_slc2) if len(_slc2) > 0 else np.nan
+                print(f"  Pair var_ratio reference (raw) (unfiltered): {pv_win2:.4e}")
 
     return result
 
@@ -434,7 +471,11 @@ def save_results(results, out_path):
                 d[f"{p}_t{k}_vr"]    = obs['vr']
                 d[f"{p}_t{k}_C"]     = C
         else:
-            d[f"{p}_pair_var"] = res['pair_var_mean']
+            d[f"{p}_pair_var"]     = res['pair_var_mean']
+            d[f"{p}_pair_var_all"] = res.get('pair_var_mean_all',
+                                              res['pair_var_mean'])
+            n_rm = len(res.get('pairs_removed', []))
+            d[f"{p}_n_pairs_removed"] = np.int64(n_rm)
     np.savez(out_path, **d)
     print(f"Saved → {out_path}")
 
@@ -453,6 +494,10 @@ def main():
     pa.add_argument("--n-jobs",      type=int,  default=-1)
     pa.add_argument("--seed",        type=int,  default=DEFAULT_SEED)
     pa.add_argument("--out",         type=str,  default="results_o32.npz")
+    pa.add_argument("--filter-anomalous", action="store_true", dest="filter_anomalous",
+                    help="Exclude outlier pairs from control reference "
+                         "(delta_c outside median ± 2×IQR). "
+                         "Both filtered and unfiltered results are reported.")
     pa.add_argument("--quick",       action="store_true",
                     help="Smoke test: q=61 only, M=5, 2 triplets")
     args = pa.parse_args()
@@ -474,7 +519,8 @@ def main():
         results.append(run_prime(q=q, M=M, bfs_frac=bfs_frac, n_max=n_max,
                                  n0=n0, n1=n1, auto_window=args.auto_window,
                                  n_triplets=n_triplets, n_jobs=args.n_jobs,
-                                 seed=args.seed, verbose=True))
+                                 seed=args.seed, verbose=True,
+                                 filter_anomalous=args.filter_anomalous))
     print_summary(results)
     save_results(results, args.out)
 
