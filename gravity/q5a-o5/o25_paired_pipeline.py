@@ -230,11 +230,14 @@ def _compute_one_pair(idx, c, qc, shells, ns, q, gens, n_max_block,
     """
     rng = np.random.default_rng(base_seed + idx * 997 + c * 7)
     n_shells = len(shells)
-    sp_accumulator   = np.zeros(n_shells)
-    delta_arr        = np.full(M, np.nan)
-    r2_arr           = np.full(M, np.nan)
-    sc_accumulator   = np.zeros(n_shells)
-    sqmc_accumulator = np.zeros(n_shells)
+    sp_accumulator      = np.zeros(n_shells)
+    delta_arr           = np.full(M, np.nan)
+    r2_arr              = np.full(M, np.nan)
+    sc_accumulator      = np.zeros(n_shells)
+    sqmc_accumulator    = np.zeros(n_shells)
+    # O-2: squared accumulators for intra-block variance E[sigma^2] - E[sigma]^2
+    sc_sq_accumulator   = np.zeros(n_shells)
+    sqmc_sq_accumulator = np.zeros(n_shells)
 
     # Vectors for O26 Test 4 (first block only)
     adm_c, adm_qmc = None, None  # Q5a-O5 admissibility weights
@@ -278,9 +281,11 @@ def _compute_one_pair(idx, c, qc, shells, ns, q, gens, n_max_block,
 
         n_sh = min(len(sv_c), len(sv_qc))
         sp   = sv_c[:n_sh] * sv_qc[:n_sh]
-        sp_accumulator[:n_sh]   += sp
-        sc_accumulator[:n_sh]   += sv_c[:n_sh]
-        sqmc_accumulator[:n_sh] += sv_qc[:n_sh]
+        sp_accumulator[:n_sh]      += sp
+        sc_accumulator[:n_sh]      += sv_c[:n_sh]
+        sqmc_accumulator[:n_sh]    += sv_qc[:n_sh]
+        sc_sq_accumulator[:n_sh]   += sv_c[:n_sh] ** 2
+        sqmc_sq_accumulator[:n_sh] += sv_qc[:n_sh] ** 2
 
         d, r2 = fit_delta_pair(sp, ns, n0, min(n1, n_sh - 1))
         delta_arr[m] = d
@@ -288,6 +293,7 @@ def _compute_one_pair(idx, c, qc, shells, ns, q, gens, n_max_block,
 
     return (idx,
             sp_accumulator / M, sc_accumulator / M, sqmc_accumulator / M,
+            sc_sq_accumulator / M, sqmc_sq_accumulator / M,
             delta_arr, r2_arr,
             vecs_c, vecs_qmc,
             basis_c   if store_vectors else None,
@@ -453,9 +459,11 @@ def run_one_prime(q, M=M_PER_PAIR_DEFAULT, seed=DEFAULT_SEED,
                     if out_dir is not None else None)
 
     # Initialise storage; try to resume from partial checkpoint
-    sigma_pair_mean  = np.zeros((n_pairs, len(shells)))
-    sigma_c_mean     = np.zeros((n_pairs, len(shells)))
-    sigma_qmc_mean   = np.zeros((n_pairs, len(shells)))
+    sigma_pair_mean   = np.zeros((n_pairs, len(shells)))
+    sigma_c_mean      = np.zeros((n_pairs, len(shells)))
+    sigma_qmc_mean    = np.zeros((n_pairs, len(shells)))
+    sigma_c_sq_mean   = np.zeros((n_pairs, len(shells)))
+    sigma_qmc_sq_mean = np.zeros((n_pairs, len(shells)))
     delta_samples    = np.full((n_pairs, M), np.nan)
     r2_samples       = np.full((n_pairs, M), np.nan)
     start_pair       = 0
@@ -528,13 +536,17 @@ def run_one_prime(q, M=M_PER_PAIR_DEFAULT, seed=DEFAULT_SEED,
             )
             for idx, (c, qc) in batch
         )
-        for (idx, sp_mean, sc_mean, sqmc_mean, d_arr, r2_arr,
+        for (idx, sp_mean, sc_mean, sqmc_mean,
+             sc_sq_mean, sqmc_sq_mean,
+             d_arr, r2_arr,
              vecs_c, vecs_qmc, basis_c, basis_qmc,
              pi_c, pi_qmc,
              adm_c, adm_qmc) in batch_results:
-            sigma_pair_mean[idx]  = sp_mean
-            sigma_c_mean[idx]     = sc_mean
-            sigma_qmc_mean[idx]   = sqmc_mean
+            sigma_pair_mean[idx]    = sp_mean
+            sigma_c_mean[idx]       = sc_mean
+            sigma_qmc_mean[idx]     = sqmc_mean
+            sigma_c_sq_mean[idx]    = sc_sq_mean
+            sigma_qmc_sq_mean[idx]  = sqmc_sq_mean
             delta_samples[idx]    = d_arr
             r2_samples[idx]       = r2_arr
             if store_vectors and vecs_c is not None:
@@ -611,6 +623,8 @@ def run_one_prime(q, M=M_PER_PAIR_DEFAULT, seed=DEFAULT_SEED,
         sigma_pair_mean=sigma_pair_mean,
         sigma_c_mean=sigma_c_mean,
         sigma_qmc_mean=sigma_qmc_mean,
+        sigma_c_sq_mean=sigma_c_sq_mean,
+        sigma_qmc_sq_mean=sigma_qmc_sq_mean,
         delta_pair_samples=delta_samples,
         delta_pair_mean=delta_pair_mean,
         delta_pair_std=delta_pair_std,
@@ -660,6 +674,8 @@ def save_npz(res, out_path):
         sigma_pair_mean    = res["sigma_pair_mean"].astype(np.float64),
         sigma_c_mean       = res["sigma_c_mean"].astype(np.float64),
         sigma_qmc_mean     = res["sigma_qmc_mean"].astype(np.float64),
+        sigma_c_sq_mean    = res["sigma_c_sq_mean"].astype(np.float64),
+        sigma_qmc_sq_mean  = res["sigma_qmc_sq_mean"].astype(np.float64),
         delta_pair_samples = res["delta_pair_samples"].astype(np.float64),
         delta_pair_mean    = res["delta_pair_mean"].astype(np.float64),
         delta_pair_std     = res["delta_pair_std"].astype(np.float64),
