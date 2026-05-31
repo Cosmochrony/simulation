@@ -24,6 +24,11 @@ spectral_O12.py.
 import argparse
 import sys
 import numpy as np
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(it=None, **kw):
+        return it if it is not None else iter(())
 from spectral_O12 import (build_generators, bfs_shells_depth_capped,
                           compute_block_capacity_freq)
 
@@ -61,7 +66,8 @@ def sigma_profile(shells, block, q, gens, n_max):
     return sv
 
 
-def run(q, n0, n1, buffer=3, n_orbits=None, aux_pairs=None, seed=0, exhaustive=False):
+def run(q, n0, n1, buffer=3, n_orbits=None, aux_pairs=None, seed=0, exhaustive=False,
+        progress=False):
     omega = primitive_cube_root(q)
     if omega is None:
         print(f"q={q}: q != 1 (mod 3) -> no primitive cube root, no colour triplets. "
@@ -95,31 +101,33 @@ def run(q, n0, n1, buffer=3, n_orbits=None, aux_pairs=None, seed=0, exhaustive=F
                 out.append((c2, c3))
         return out
 
+    # Precompute the list of base blocks so the total is known for the ETA bar.
+    base = [(c, c2, c3) for c in reps for (c2, c3) in aux_list(c)]
     maxdev = {'A': 0.0, 'B': 0.0}
     argmax = {'A': None, 'B': None}
-    nblocks = 0
-    for c in reps:
+    facs = [1, omega, w2]
+    it = tqdm(base, desc=f"q={q}", unit="blk", leave=False) if progress else base
+    for (c, c2, c3) in it:
         cc = [c, (omega * c) % q, (w2 * c) % q]
-        for (c2, c3) in aux_list(c):
-            nblocks += 1
-            # matching A: same auxiliary across the orbit
-            sA = [sigma_profile(shells, (cc[i], c2, c3), q, gens, n_max) for i in range(3)]
-            # matching B: auxiliary scaled by the same orbit factor
-            facs = [1, omega, w2]
-            sB = [sigma_profile(shells,
-                                (cc[i], (facs[i] * c2) % q, (facs[i] * c3) % q),
-                                q, gens, n_max) for i in range(3)]
-            for tag, S in (('A', sA), ('B', sB)):
-                L = min(len(x) for x in S)
-                lo, hi = n0, min(n1, L - 1)
-                if hi < lo:
-                    continue
-                stk = np.stack([x[lo:hi + 1] for x in S])
-                dev = float(np.max(np.abs(stk - stk[0])))
-                if dev > maxdev[tag]:
-                    maxdev[tag] = dev
-                    argmax[tag] = (c, c2, c3)
-    return maxdev, argmax, nblocks, len(reps), depth, sum(len(s) for s in shells)
+        # matching A: same auxiliary across the orbit
+        sA = [sigma_profile(shells, (cc[i], c2, c3), q, gens, n_max) for i in range(3)]
+        # matching B: auxiliary scaled by the same orbit factor
+        sB = [sigma_profile(shells,
+                            (cc[i], (facs[i] * c2) % q, (facs[i] * c3) % q),
+                            q, gens, n_max) for i in range(3)]
+        for tag, S in (('A', sA), ('B', sB)):
+            L = min(len(x) for x in S)
+            lo, hi = n0, min(n1, L - 1)
+            if hi < lo:
+                continue
+            stk = np.stack([x[lo:hi + 1] for x in S])
+            dev = float(np.max(np.abs(stk - stk[0])))
+            if dev > maxdev[tag]:
+                maxdev[tag] = dev
+                argmax[tag] = (c, c2, c3)
+        if progress and hasattr(it, 'set_postfix'):
+            it.set_postfix(A=f"{maxdev['A']:.1e}", B=f"{maxdev['B']:.1e}")
+    return maxdev, argmax, len(base), len(reps), depth, sum(len(s) for s in shells)
 
 
 if __name__ == '__main__':
@@ -133,7 +141,8 @@ if __name__ == '__main__':
     pa.add_argument('--seed', type=int, default=0)
     args = pa.parse_args()
     out = run(args.q, args.n0, args.n1, n_orbits=args.n_orbits,
-              aux_pairs=args.aux_pairs, seed=args.seed, exhaustive=args.exhaustive)
+              aux_pairs=args.aux_pairs, seed=args.seed, exhaustive=args.exhaustive,
+              progress=True)
     if out is None:
         sys.exit(0)
     md, am, nb, nr, depth, nodes = out
