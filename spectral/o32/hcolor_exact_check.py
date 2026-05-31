@@ -22,9 +22,10 @@ Uses compute_block_capacity_fast + bfs_shells_depth_capped from the unified
 spectral_O12.py.
 """
 import argparse
+import sys
 import numpy as np
 from spectral_O12 import (build_generators, bfs_shells_depth_capped,
-                          compute_block_capacity_fast)
+                          compute_block_capacity_freq)
 
 
 def primitive_cube_root(q):
@@ -55,14 +56,20 @@ def orbit_reps(q, omega):
 
 
 def sigma_profile(shells, block, q, gens, n_max):
-    sv, _, _, _ = compute_block_capacity_fast(shells, np.array(block, np.int64),
+    sv, _, _, _ = compute_block_capacity_freq(shells, np.array(block, np.int64),
                                               q, gens, n_max=n_max)
     return sv
 
 
 def run(q, n0, n1, buffer=3, n_orbits=None, aux_pairs=None, seed=0, exhaustive=False):
     omega = primitive_cube_root(q)
-    assert omega is not None, f"q={q} is not 1 mod 3"
+    if omega is None:
+        print(f"q={q}: q != 1 (mod 3) -> no primitive cube root, no colour triplets. "
+              f"This is a CONTROL prime for the colour sector; the [H-color] triplet "
+              f"test only applies to test primes q == 1 (mod 3) "
+              f"(e.g. 61, 151, 211, 307, 313, 331, 337, 349, ...).")
+        return None
+
     w2 = (omega * omega) % q
     gens = build_generators(q)
     depth = n1 + buffer
@@ -125,9 +132,11 @@ if __name__ == '__main__':
     pa.add_argument('--exhaustive', action='store_true')
     pa.add_argument('--seed', type=int, default=0)
     args = pa.parse_args()
-    md, am, nb, nr, depth, nodes = run(
-        args.q, args.n0, args.n1, n_orbits=args.n_orbits,
-        aux_pairs=args.aux_pairs, seed=args.seed, exhaustive=args.exhaustive)
+    out = run(args.q, args.n0, args.n1, n_orbits=args.n_orbits,
+              aux_pairs=args.aux_pairs, seed=args.seed, exhaustive=args.exhaustive)
+    if out is None:
+        sys.exit(0)
+    md, am, nb, nr, depth, nodes = out
     print(f"q={args.q}  window [{args.n0},{args.n1}]  depth-capped BFS to {depth} "
           f"({nodes} nodes)  orbits={nr}  base blocks={nb}")
     print(f"  matching A (same aux):   max|sigma_i - sigma_j| = {md['A']:.3e}  at {am['A']}")
