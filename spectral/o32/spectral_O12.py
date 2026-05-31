@@ -229,16 +229,20 @@ def gram_schmidt_batch(basis_mat, new_vecs, eps=EPS_GS):
     return basis_mat, delta_r
 
 
-def gram_schmidt_batch_with_residuals(basis_mat, new_vecs, eps=EPS_GS):
+def gram_schmidt_batch_with_residuals(basis_mat, new_vecs, eps=EPS_GS,
+                                      normalise=True):
     """
-    Like gram_schmidt_batch, but also returns the residual norm for every
-    input vector (whether it was accepted into the basis or not).
+    Like gram_schmidt_batch, but returns normalised residual norms.
 
-    Returns (new_basis_mat, delta_r, residual_norms)
-    where residual_norms is a 1-D float64 array of length len(new_vecs).
-    The residual norm for vector s is ‖w_s‖ after projection onto the span
-    accumulated so far (including vectors added earlier in this batch).
-    This is the quantity v_c^(n)[s] = ‖r_s^(n)‖ used in O26 §3.3.
+    For each input vector v_s, the normalised residual is:
+        res[s] = ||w_s|| / ||v_s||   in [0, 1]
+    where w_s is the residual after projecting v_s onto the current span.
+
+    Normalisation ensures:
+        sum_s res[s]^2 / |S_n|  ~  sigma_c(n)   (O12 definition)
+    making ||v_c^(n)||^2 / |S_n| consistent with O26 Eq.(11).
+
+    Returns (new_basis_mat, delta_r, residual_norms).
     """
     delta_r = 0
     residual_norms = np.zeros(len(new_vecs), dtype=np.float64)
@@ -248,14 +252,18 @@ def gram_schmidt_batch_with_residuals(basis_mat, new_vecs, eps=EPS_GS):
         if basis_mat.shape[0] >= new_vecs.shape[1]:
             residual_norms[i] = 0.0
             continue
+        orig_norm = float(np.linalg.norm(vec))
+        if orig_norm < eps:
+            residual_norms[i] = 0.0
+            continue
         w = vec.copy()
         if basis_mat.shape[0] > 0:
             coeffs = basis_mat.conj() @ w
             w -= basis_mat.T @ coeffs
-        norm = float(np.linalg.norm(w))
-        residual_norms[i] = norm
-        if norm > eps:
-            basis_mat = np.vstack([basis_mat, (w / norm)[None, :]])
+        res_norm = float(np.linalg.norm(w))
+        residual_norms[i] = res_norm / orig_norm if normalise else res_norm
+        if res_norm > eps:
+            basis_mat = np.vstack([basis_mat, (w / res_norm)[None, :]])
             delta_r += 1
     return basis_mat, delta_r, residual_norms
 
@@ -360,6 +368,12 @@ def compute_block_capacity_with_residuals(shells, c_block, q, gens,
     residuals     : list of 1-D float64 arrays, one per shell in [n0, n1].
                     Index k corresponds to shell n0+k.
                     Empty list if n0 > n1 or no shells in range.
+    basis_mat_window : ndarray (rank, q), complex
+                    GS orthonormal basis up to shell n1.
+    pi_coords     : list of ndarrays (N_s, HEFF_DIM) per shell.
+    shell_all_vecs : list of ndarrays (N_s, q), complex, per shell in [n0,n1].
+                    Raw Weil fingerprint vectors.  Required for Q5a-O5
+                    admissibility weight computation.
     """
     gens_arr = np.array(gens, dtype=np.int64)
     c_block  = np.asarray(c_block, dtype=np.int64)
@@ -371,6 +385,9 @@ def compute_block_capacity_with_residuals(shells, c_block, q, gens,
     delta_r_vals= []
     shell_sizes = []
     residuals   = []          # one entry per shell in [n0, n1]
+    # shell_all_vecs[k]: all fingerprint vectors of shell n0+k, shape (N_s, q).
+    # Used after the loop to compute per-vector H_eff projections.
+    shell_all_vecs = []
 
     for n, shell in enumerate(shells):
         if n_max is not None and n > n_max:
@@ -379,7 +396,8 @@ def compute_block_capacity_with_residuals(shells, c_block, q, gens,
             break
         shell_arr = np.array(shell, dtype=np.int64)
         delta_r   = 0
-        shell_residuals = []   # collect per-chunk residuals for this shell
+        shell_residuals  = []
+        shell_vecs_chunks = []   # all fingerprint vectors in this shell
 
         capture = (n0 <= n <= n1)
 
@@ -390,6 +408,7 @@ def compute_block_capacity_with_residuals(shells, c_block, q, gens,
                 basis_mat, dr, res = gram_schmidt_batch_with_residuals(
                     basis_mat, vecs)
                 shell_residuals.append(res)
+                shell_vecs_chunks.append(vecs)   # (chunk_size, q)
             else:
                 basis_mat, dr = gram_schmidt_batch(basis_mat, vecs)
             delta_r += dr
@@ -407,16 +426,44 @@ def compute_block_capacity_with_residuals(shells, c_block, q, gens,
                 np.concatenate(shell_residuals) if shell_residuals
                 else np.zeros(0, dtype=np.float64)
             )
+            if shell_vecs_chunks:
+                shell_all_vecs.append(
+                    np.concatenate(shell_vecs_chunks, axis=0))  # (N_s, q)
+            else:
+                shell_all_vecs.append(None)
 
-        if basis_mat is not None and basis_mat.shape[0] >= q:
+        if basis_mat is not None and basis_mat.shape[0] >= q and not capture:
             break
 
     final_rank = 0 if basis_mat is None else basis_mat.shape[0]
+    # basis_mat_window: orthonormal basis up to shell n1. Shape (rank, q).
+    basis_mat_window = (basis_mat.copy()
+                        if basis_mat is not None
+                        else np.empty((0, 1), dtype=np.complex128))
+
+    # pi_coords[k]: (N_s, HEFF_DIM) complex matrix of per-vector H_eff projections
+    # for shell n0+k. Row s = pi(v_s^(n0+k)) = basis_heff @ v_s in C^3.
+    # This is the exact input to iota o rho for O26 Test 4 (per-vector, not mean).
+    HEFF_DIM = 3
+    basis_heff = (basis_mat_window[:HEFF_DIM]
+                  if basis_mat_window.shape[0] >= HEFF_DIM
+                  else basis_mat_window)
+    pi_coords = []
+    for sv in shell_all_vecs:
+        if sv is not None and basis_heff.shape[0] > 0:
+            # sv: (N_s, q), basis_heff: (HEFF_DIM, q)
+            # pi(v_s) = basis_heff @ v_s  -> each row gives (HEFF_DIM,)
+            pi_coords.append(sv @ basis_heff.conj().T)  # (N_s, HEFF_DIM)
+        else:
+            pi_coords.append(np.zeros((0, HEFF_DIM), dtype=complex))
     return (np.array(sigma_vals),
             np.array(delta_r_vals),
             np.array(shell_sizes),
             final_rank,
-            residuals)
+            residuals,
+            basis_mat_window,
+            pi_coords,
+            shell_all_vecs)  # Q5a-O5: raw fingerprint vectors per shell
 
 
 def ols_loglog(ns, sigma_bar, n0, n1):
@@ -991,3 +1038,81 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+def _absorb_block_fast(Q, r, W, eps=EPS_GS):
+    """Absorb (m,q) block W into orthonormal basis Q (first r rows valid).
+    Projection matmul + QR(mode='r') (no tall Q factor) + small (<=q,q) SVD.
+    Returns (r, new_dirs). Order-independent: counts the rank increment only."""
+    q = Q.shape[1]
+    if r >= q:
+        return r, 0
+    if r > 0:
+        W = W - (W @ Q[:r].conj().T) @ Q[:r]
+    R = np.linalg.qr(W, mode='r')
+    _, sv, Vh = np.linalg.svd(R, full_matrices=False)
+    new = min(int(np.count_nonzero(sv > eps)), q - r)
+    if new > 0:
+        Q[r:r + new] = Vh[:new]
+        r += new
+    return r, new
+
+
+def compute_block_capacity_fast(shells, c_block, q, gens, n_max=None, eps=EPS_GS,
+                                chunk_size=CHUNK_SIZE):
+    """Accelerated drop-in for compute_block_capacity. sigma_c(n)=delta_r_n/|S_n|
+    is a rank increment (order-independent), so the per-vector loop and quadratic
+    vstack are replaced by one batched projection + QR/SVD per chunk. Byte-identical
+    sigma to compute_block_capacity over the fit window. Same return signature:
+    (sigma_vals, delta_r_vals, shell_sizes, final_rank)."""
+    gens_arr = np.array(gens, dtype=np.int64)
+    c_block = np.asarray(c_block, dtype=np.int64)
+    Q = np.zeros((q, q), dtype=np.complex128)
+    r = 0
+    sigma_vals, delta_r_vals, shell_sizes = [], [], []
+    for n, shell in enumerate(shells):
+        if n_max is not None and n > n_max:
+            break
+        if len(shell) == 0:
+            break
+        shell_arr = np.array(shell, dtype=np.int64)
+        delta_r = 0
+        for start in range(0, len(shell_arr), chunk_size):
+            if r >= q:
+                break
+            chunk = shell_arr[start:start + chunk_size]
+            W = fingerprint_vectors_batch(chunk, c_block, gens_arr, q)
+            r, dr = _absorb_block_fast(Q, r, W, eps)
+            delta_r += dr
+        sz = len(shell)
+        sigma_vals.append(delta_r / sz if sz > 0 else 0.0)
+        delta_r_vals.append(delta_r)
+        shell_sizes.append(sz)
+        if r >= q:
+            break
+    return (np.array(sigma_vals), np.array(delta_r_vals),
+            np.array(shell_sizes), r)
+
+
+def bfs_shells_depth_capped(gens, q, max_depth):
+    """BFS from identity stopping at max_depth instead of a node fraction.
+    The delta/sigma campaign needs only shells 0..n1, and the early shells are
+    identical across q until the L1 ball wraps the modulus (~depth q/2). At q=401,
+    capping at depth ~15 visits ~2e4 nodes instead of ~3e6, with byte-identical
+    sigma over the fit window. Use max_depth = n1 + a small buffer."""
+    identity = (0, 0, 0)
+    visited = {identity}
+    cur = [identity]
+    shells = [cur]
+    for _ in range(max_depth):
+        nxt = []
+        for u in cur:
+            for g in gens:
+                v = heisenberg_mul(u, g, q)
+                if v not in visited:
+                    visited.add(v)
+                    nxt.append(v)
+        if not nxt:
+            break
+        shells.append(nxt)
+        cur = nxt
+    return shells
