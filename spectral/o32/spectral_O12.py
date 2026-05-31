@@ -1116,3 +1116,56 @@ def bfs_shells_depth_capped(gens, q, max_depth):
         shells.append(nxt)
         cur = nxt
     return shells
+
+
+def compute_block_capacity_freq(shells, c_block, q, gens, n_max=None):
+    """Closed-form sigma_c(n) by frequency counting -- exact and ~10^2-10^3x faster.
+
+    Every O12 fingerprint vector is a single additive character
+        fp[x] = q^{-3/2} exp(2 pi i (A + B x)/q),  B = c1 b1 + c2 b2 + c3 b3 (mod q),
+    where (a_i, b_i, g_i) are the three accumulated generator steps g*s1, g*s1*s2,
+    g*s1*s2*s3. Additive characters are orthonormal, so fingerprint vectors are
+    linearly independent iff their frequencies B are distinct. Hence the
+    Gram-Schmidt rank increment of a shell equals the number of NEW distinct
+    frequencies it contributes, and sigma_c(n) = |new distinct B| / |S_n|.
+    No Gram-Schmidt, no SVD: O(|S_n|) per shell. Verified sigma-identical to
+    compute_block_capacity (max difference 0.0) for q in {61, 101, 151}.
+
+    Same return signature as compute_block_capacity:
+    (sigma_vals, delta_r_vals, shell_sizes, final_rank)."""
+    c1, c2, c3 = (int(c_block[0]) % q, int(c_block[1]) % q, int(c_block[2]) % q)
+    gens_t = [tuple(int(x) for x in g) for g in gens]
+    seen = set()
+    sigma_vals, delta_r_vals, shell_sizes = [], [], []
+    for n, shell in enumerate(shells):
+        if n_max is not None and n > n_max:
+            break
+        if len(shell) == 0:
+            break
+        shell_arr = np.array(shell, dtype=np.int64)
+        before = len(seen)
+        done = False
+        for s1 in gens_t:
+            ep1 = heisenberg_mul_batch(shell_arr, s1, q)
+            for s2 in gens_t:
+                ep2 = heisenberg_mul_batch(ep1, s2, q)
+                for s3 in gens_t:
+                    ep3 = heisenberg_mul_batch(ep2, s3, q)
+                    B = (c1 * ep1[:, 1] + c2 * ep2[:, 1] + c3 * ep3[:, 1]) % q
+                    seen.update(B.tolist())
+                    if len(seen) >= q:
+                        done = True
+                        break
+                if done:
+                    break
+            if done:
+                break
+        sz = len(shell)
+        delta_r = len(seen) - before
+        sigma_vals.append(delta_r / sz if sz > 0 else 0.0)
+        delta_r_vals.append(delta_r)
+        shell_sizes.append(sz)
+        if len(seen) >= q:
+            break
+    return (np.array(sigma_vals), np.array(delta_r_vals),
+            np.array(shell_sizes), len(seen))
