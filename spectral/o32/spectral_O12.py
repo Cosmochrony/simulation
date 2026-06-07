@@ -229,8 +229,7 @@ def gram_schmidt_batch(basis_mat, new_vecs, eps=EPS_GS):
     return basis_mat, delta_r
 
 
-def gram_schmidt_batch_with_residuals(basis_mat, new_vecs, eps=EPS_GS,
-                                      normalise=True):
+def gram_schmidt_batch_with_residuals(basis_mat, new_vecs, eps=EPS_GS, admitted_out=None):
     """
     Like gram_schmidt_batch, but returns normalised residual norms.
 
@@ -261,10 +260,12 @@ def gram_schmidt_batch_with_residuals(basis_mat, new_vecs, eps=EPS_GS,
             coeffs = basis_mat.conj() @ w
             w -= basis_mat.T @ coeffs
         res_norm = float(np.linalg.norm(w))
-        residual_norms[i] = res_norm / orig_norm if normalise else res_norm
+        residual_norms[i] = res_norm / orig_norm
         if res_norm > eps:
             basis_mat = np.vstack([basis_mat, (w / res_norm)[None, :]])
             delta_r += 1
+            if admitted_out is not None:
+                admitted_out.append(res_norm / orig_norm)
     return basis_mat, delta_r, residual_norms
 
 
@@ -336,6 +337,68 @@ def compute_block_capacity(shells, c_block, q, gens, n_max=None):
     return (np.array(sigma_vals),
             np.array(delta_r_vals),
             np.array(shell_sizes),
+            final_rank)
+
+
+def compute_block_admission_record(shells, c_block, q, gens, n_max=None):
+    """Full-trajectory Gram-Schmidt admission record for one block H_c.
+
+    Runs the same BFS+GS cascade as compute_block_capacity, but captures, for
+    every newly admitted independent direction j, its admission shell depth
+    m_j and its normalized residual at admission w_j = ||w_j^GS|| / ||v_j||.
+
+    Unlike compute_block_capacity_with_residuals, this captures over ALL shells
+    (not only a window), which is required to form the residual support
+    R_n = {j : m_j > n} and the admissibility-weighted entropy on it.
+
+    Returns
+    -------
+    admit_shells : 1-D int array, length final_rank.  admit_shells[j] = m_j.
+    admit_weights: 1-D float array, length final_rank.  admit_weights[j] = w_j.
+    delta_r_vals : 1-D int array (per shell), for cross-check against |R_n|.
+    shell_sizes  : 1-D int array.
+    final_rank   : int.
+    """
+    gens_arr = np.array(gens, dtype=np.int64)
+    c_block = np.asarray(c_block, dtype=np.int64)
+
+    basis_mat = None
+    admit_shells = []
+    admit_weights = []
+    delta_r_vals = []
+    shell_sizes = []
+
+    for n, shell in enumerate(shells):
+        if n_max is not None and n > n_max:
+            break
+        if len(shell) == 0:
+            break
+        shell_arr = np.array(shell, dtype=np.int64)
+        delta_r = 0
+        shell_admitted = []  # weights admitted in this shell
+
+        for start in range(0, len(shell_arr), CHUNK_SIZE):
+            chunk = shell_arr[start:start + CHUNK_SIZE]
+            vecs = fingerprint_vectors_batch(chunk, c_block, gens_arr, q)
+            basis_mat, dr, _ = gram_schmidt_batch_with_residuals(
+                basis_mat, vecs, admitted_out=shell_admitted)
+            delta_r += dr
+            if basis_mat is not None and basis_mat.shape[0] >= q:
+                break
+
+        admit_shells.extend([n] * len(shell_admitted))
+        admit_weights.extend(shell_admitted)
+        delta_r_vals.append(delta_r)
+        shell_sizes.append(len(shell))
+
+        if basis_mat is not None and basis_mat.shape[0] >= q:
+            break
+
+    final_rank = 0 if basis_mat is None else basis_mat.shape[0]
+    return (np.array(admit_shells, dtype=np.int64),
+            np.array(admit_weights, dtype=np.float64),
+            np.array(delta_r_vals, dtype=np.int64),
+            np.array(shell_sizes, dtype=np.int64),
             final_rank)
 
 
@@ -1038,134 +1101,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-def _absorb_block_fast(Q, r, W, eps=EPS_GS):
-    """Absorb (m,q) block W into orthonormal basis Q (first r rows valid).
-    Projection matmul + QR(mode='r') (no tall Q factor) + small (<=q,q) SVD.
-    Returns (r, new_dirs). Order-independent: counts the rank increment only."""
-    q = Q.shape[1]
-    if r >= q:
-        return r, 0
-    if r > 0:
-        W = W - (W @ Q[:r].conj().T) @ Q[:r]
-    R = np.linalg.qr(W, mode='r')
-    _, sv, Vh = np.linalg.svd(R, full_matrices=False)
-    new = min(int(np.count_nonzero(sv > eps)), q - r)
-    if new > 0:
-        Q[r:r + new] = Vh[:new]
-        r += new
-    return r, new
-
-
-def compute_block_capacity_fast(shells, c_block, q, gens, n_max=None, eps=EPS_GS,
-                                chunk_size=CHUNK_SIZE):
-    """Accelerated drop-in for compute_block_capacity. sigma_c(n)=delta_r_n/|S_n|
-    is a rank increment (order-independent), so the per-vector loop and quadratic
-    vstack are replaced by one batched projection + QR/SVD per chunk. Byte-identical
-    sigma to compute_block_capacity over the fit window. Same return signature:
-    (sigma_vals, delta_r_vals, shell_sizes, final_rank)."""
-    gens_arr = np.array(gens, dtype=np.int64)
-    c_block = np.asarray(c_block, dtype=np.int64)
-    Q = np.zeros((q, q), dtype=np.complex128)
-    r = 0
-    sigma_vals, delta_r_vals, shell_sizes = [], [], []
-    for n, shell in enumerate(shells):
-        if n_max is not None and n > n_max:
-            break
-        if len(shell) == 0:
-            break
-        shell_arr = np.array(shell, dtype=np.int64)
-        delta_r = 0
-        for start in range(0, len(shell_arr), chunk_size):
-            if r >= q:
-                break
-            chunk = shell_arr[start:start + chunk_size]
-            W = fingerprint_vectors_batch(chunk, c_block, gens_arr, q)
-            r, dr = _absorb_block_fast(Q, r, W, eps)
-            delta_r += dr
-        sz = len(shell)
-        sigma_vals.append(delta_r / sz if sz > 0 else 0.0)
-        delta_r_vals.append(delta_r)
-        shell_sizes.append(sz)
-        if r >= q:
-            break
-    return (np.array(sigma_vals), np.array(delta_r_vals),
-            np.array(shell_sizes), r)
-
-
-def bfs_shells_depth_capped(gens, q, max_depth):
-    """BFS from identity stopping at max_depth instead of a node fraction.
-    The delta/sigma campaign needs only shells 0..n1, and the early shells are
-    identical across q until the L1 ball wraps the modulus (~depth q/2). At q=401,
-    capping at depth ~15 visits ~2e4 nodes instead of ~3e6, with byte-identical
-    sigma over the fit window. Use max_depth = n1 + a small buffer."""
-    identity = (0, 0, 0)
-    visited = {identity}
-    cur = [identity]
-    shells = [cur]
-    for _ in range(max_depth):
-        nxt = []
-        for u in cur:
-            for g in gens:
-                v = heisenberg_mul(u, g, q)
-                if v not in visited:
-                    visited.add(v)
-                    nxt.append(v)
-        if not nxt:
-            break
-        shells.append(nxt)
-        cur = nxt
-    return shells
-
-
-def compute_block_capacity_freq(shells, c_block, q, gens, n_max=None):
-    """Closed-form sigma_c(n) by frequency counting -- exact and ~10^2-10^3x faster.
-
-    Every O12 fingerprint vector is a single additive character
-        fp[x] = q^{-3/2} exp(2 pi i (A + B x)/q),  B = c1 b1 + c2 b2 + c3 b3 (mod q),
-    where (a_i, b_i, g_i) are the three accumulated generator steps g*s1, g*s1*s2,
-    g*s1*s2*s3. Additive characters are orthonormal, so fingerprint vectors are
-    linearly independent iff their frequencies B are distinct. Hence the
-    Gram-Schmidt rank increment of a shell equals the number of NEW distinct
-    frequencies it contributes, and sigma_c(n) = |new distinct B| / |S_n|.
-    No Gram-Schmidt, no SVD: O(|S_n|) per shell. Verified sigma-identical to
-    compute_block_capacity (max difference 0.0) for q in {61, 101, 151}.
-
-    Same return signature as compute_block_capacity:
-    (sigma_vals, delta_r_vals, shell_sizes, final_rank)."""
-    c1, c2, c3 = (int(c_block[0]) % q, int(c_block[1]) % q, int(c_block[2]) % q)
-    gens_t = [tuple(int(x) for x in g) for g in gens]
-    seen = set()
-    sigma_vals, delta_r_vals, shell_sizes = [], [], []
-    for n, shell in enumerate(shells):
-        if n_max is not None and n > n_max:
-            break
-        if len(shell) == 0:
-            break
-        shell_arr = np.array(shell, dtype=np.int64)
-        before = len(seen)
-        done = False
-        for s1 in gens_t:
-            ep1 = heisenberg_mul_batch(shell_arr, s1, q)
-            for s2 in gens_t:
-                ep2 = heisenberg_mul_batch(ep1, s2, q)
-                for s3 in gens_t:
-                    ep3 = heisenberg_mul_batch(ep2, s3, q)
-                    B = (c1 * ep1[:, 1] + c2 * ep2[:, 1] + c3 * ep3[:, 1]) % q
-                    seen.update(B.tolist())
-                    if len(seen) >= q:
-                        done = True
-                        break
-                if done:
-                    break
-            if done:
-                break
-        sz = len(shell)
-        delta_r = len(seen) - before
-        sigma_vals.append(delta_r / sz if sz > 0 else 0.0)
-        delta_r_vals.append(delta_r)
-        shell_sizes.append(sz)
-        if len(seen) >= q:
-            break
-    return (np.array(sigma_vals), np.array(delta_r_vals),
-            np.array(shell_sizes), len(seen))
