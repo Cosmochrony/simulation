@@ -52,6 +52,53 @@ import numpy as np
 EPS_RANK = 1.0  # floor for the residual rank (rank 1 = separable, S_ent = 0)
 
 
+def adm_entropy_from_admitted(admit_shells: np.ndarray,
+                              admit_weights: np.ndarray,
+                              ns: np.ndarray) -> dict:
+    """Per-BLOCK admissibility-weighted entropy on the residual support.
+
+    Implements the (b1) operational ansatz for ONE block:
+        R_n = {j : m_j > n}                       residual support at depth n
+        r_pair(n) = |R_n|
+        p_j(n)   = w_j / sum_{k in R_n} w_k
+        S_ent(n) = - sum_{j in R_n} p_j log p_j   (= the entropy directly)
+        eps_adm(n) = log r_pair(n) - S_ent(n)     (deficit from flat spectrum)
+
+    admit_shells[j] = m_j, admit_weights[j] = w_j (from
+    spectral_O12.compute_block_admission_record).
+
+    Returns dict of arrays aligned to ns: r_pair, S_ent, eps_adm.
+
+    NB averaging rule: compute this per block, then average S_ent and eps_adm
+    across the M blocks.  Do NOT subtract a single-block eps_adm from a mean
+    log r_pair.  S_ent here already equals log r_pair - eps_adm on this block's
+    own support, so averaging S_ent across blocks is the consistent quantity.
+    """
+    admit_shells = np.asarray(admit_shells)
+    admit_weights = np.asarray(admit_weights, dtype=float)
+    ns = np.asarray(ns)
+
+    r_pair = np.empty(len(ns), dtype=float)
+    s_ent = np.empty(len(ns), dtype=float)
+    eps_adm = np.empty(len(ns), dtype=float)
+
+    for k, n in enumerate(ns):
+        w = admit_weights[admit_shells > n]
+        r = w.size
+        if r <= 1:
+            r_pair[k] = max(r, 1)
+            s_ent[k] = 0.0
+            eps_adm[k] = 0.0
+            continue
+        p = w / w.sum()
+        s = float(-(p * np.log(p)).sum())
+        r_pair[k] = r
+        s_ent[k] = s
+        eps_adm[k] = float(np.log(r) - s)
+
+    return {'r_pair': r_pair, 'S_ent': s_ent, 'eps_adm': eps_adm}
+
+
 def per_factor_residual_rank(sigma_factor_mean_row: np.ndarray,
                              shell_sizes: np.ndarray) -> tuple[np.ndarray, float]:
     """Residual GS rank for one factor (c or q-c) of a conjugate pair.
