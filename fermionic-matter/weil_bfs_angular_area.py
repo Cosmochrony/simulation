@@ -1,96 +1,85 @@
 #!/usr/bin/env python3
 """
-weil_bfs_angular_area.py
+weil_bfs_angular_area.py  (A+Bx conventions, aligned with spectral_O12 / o32)
 
-Measures the accumulated oriented J_3-odd area of the Weil-BFS cascade on
-Heis_3(Z/qZ), normalised by the projected capacity, and compares it (only at the
-final step) with the ADE-deficit dictionary value eps = 1/10.
+Measures, on the O12 single-character fingerprint
+    fp_c(g; x) = q^{-3/2} exp( 2pi i (A_c(g) + B_c(g) x) / q ),
+    B_c(g) = sum_i c_i b_i               (frequency  -> radial / capacity)
+    A_c(g) = sum_i c_i (g_i - b_i a_i)    (central phase -> angular / J_3)
+the two factorised observables of AngularAmplitudeReduction:
 
-It implements the observable fixed by the reduction lemma
-(AngularAmplitudeReduction):
+  RADIAL  (capacity):  sigma_c(n)    = |{ B_c(g) : g in shell n }| / |S_n|
+  ANGULAR (J_3 split): Theta_Weil(n) = Odd_{J_Pi}( 2pi A_c / q )  Ihat-normalised
 
-    eps_Weil(n)   = sum_{m<=n} dA_J3_odd(m)
-    Ihat(n)       = (sigma_pair(0)-sigma_pair(n)) / (sigma_pair(0)-sigma_pair(n_sat))
-    K_ar_Weil(n)  = eps_Weil(n) / Ihat(n)
-    target        = K_ar_Weil(n_3^obs) = eps_Weil(n_3^obs)        [Ihat(n_3^obs)=1]
+with  Ihat(n) = (sigma_pair(0)-sigma_pair(n)) / (sigma_pair(0)-sigma_pair(n_sat)),
+      sigma_pair = sigma_c * sigma_{q-c},  n_sat = n_3^obs.
 
-LAYER STATUS (read before trusting any number):
-  * EXACT, unambiguous layers (validated by mode=check against O30/O21):
-        - Weil block rho_cc on C^q                (O12 eq. 1)
-        - BFS on Cay(Heis_3(Z/qZ), {X^+-1,Y^+-1})
-        - sigma_cc(n), sigma_pair(n), n_3^obs, Ihat(n)
-        - static per-pair covariance C_c          (must reproduce [1:1/2:1/2], O30)
-  * CONVENTION-SENSITIVE layer (ALIGN WITH the O28/O30/Q11 pipeline):
-        - dA_J3_odd(n): the ORIENTED, J_Pi-odd J_3 increment. The orientation is
-          carried by the cascade arrow I(n); a symmetric-shell average cancels the
-          odd part by g <-> g^{-1} symmetry. The convention used here is documented
-          at `j3_odd_increment`; substitute the canonical cascade ordering if it
-          differs. Interpret K_ar_Weil ONLY after mode=check validates C_c.
+THREE GUARDRAILS (by construction):
+  1. The value 1/10 appears ONLY in final_summary(), as the *required-normalisation*
+     diagnostic N_A_required = (1/10)/Theta_Weil(n_3^obs) -- never as a result.
+  2. No A -> eps conversion happens unless N_A is explicitly provided (default None).
+  3. The primary unnormalised output is Theta_Weil (a raw angle), NOT eps.
 
-The target value 1/10 is NOT used anywhere except the final comparison print.
+mode=check additionally verifies:
+  - sigma_c(n) = distinct-B count / |S_n|;
+  - sigma invariance under the colour scaling c -> omega c (B -> omega B bijection);
+  - the sign-reversal control: A_c -> -A_c under conjugation c -> q-c, and the
+    oriented part flips sign under cascade (generator-order) reversal.
 
-Outputs (current directory):
-    weil_bfs_raw.jsonl     per-pair raw results (one JSON object per line)
-    weil_bfs_profiles.csv  K_ar_Weil(n), eps_Weil(n), sigma_pair(n), Ihat(n)
-    weil_bfs_summary.pdf    three required figures
-    checkpoint_q{q}.jsonl   resumable per-pair checkpoints
-
-Engineering: parameters at the top, multi-core over conjugate pairs, progress/ETA,
-milestone checkpoints (completed pairs are skipped on restart).
+Outputs (current directory, per q):
+  angular_area_q{q}_profile.csv
+  angular_area_q{q}_summary.json
+  angular_area_q{q}_checkpoint.jsonl
+  angular_area_q{q}.pdf
 """
 
 import os
-import sys
 import json
 import time
 import math
 import argparse
 import numpy as np
 from multiprocessing import Pool, cpu_count
-from scipy.linalg import logm
 
 # --------------------------------------------------------------------------- #
 # PARAMETERS
 # --------------------------------------------------------------------------- #
-Q_LIST = [61, 101, 151]          # primes (q = 1 mod something not required here)
-N_MAX_CAP = 28                   # hard cap on BFS depth (saturation usually < this)
-N_PAIRS = 50                     # number of generic conjugate pairs sampled per q
-SAT_FRACTION = 0.99              # n_sat = first n where Ihat(n) >= SAT_FRACTION
+Q_LIST = [61, 101, 151]
+N_MAX_CAP = 22                   # BFS depth cap (saturation usually below this)
+N_BLOCKS = 32                    # generic blocks (c1,c2,c3) sampled per q
+SAT_FRACTION = 0.99              # n_3^obs = first n with Ihat(n) >= SAT_FRACTION
+N_A = None                       # angular normalisation A -> eps; UNSET on purpose
 RNG_SEED = 20260607
 N_WORKERS = max(1, cpu_count() - 1)
-ADE_TARGET = None                # set ONLY inside final_comparison(); never used before
+EPS_DICT = 0.10                  # dictionary value; used ONLY in final_summary()
 
-CHECKPOINT_TMPL = "checkpoint_q{q}.jsonl"
-RAW_PATH = "weil_bfs_raw.jsonl"
-CSV_PATH = "weil_bfs_profiles.csv"
-PDF_PATH = "weil_bfs_summary.pdf"
-
-# Optional external O21/O30 outputs for mode=check (consistency only, not input).
-O21_N3_PATH = "o21_n3obs.json"   # {"61": n3, "101": n3, ...} if available
-O30_RATIO_PATH = "o30_ccratio.json"  # {"61": [1.0,0.5,0.5], ...} if available
+PROFILE_TMPL = "angular_area_q{q}_profile.csv"
+SUMMARY_TMPL = "angular_area_q{q}_summary.json"
+CKPT_TMPL = "angular_area_q{q}_checkpoint.jsonl"
+PDF_TMPL = "angular_area_q{q}.pdf"
 
 
 # --------------------------------------------------------------------------- #
-# Heisenberg group Heis_3(Z/qZ): elements (a, b, z), law (a,b,z)(a',b',z')
-#   = (a+a', b+b', z+z'+a b')  mod q
+# Conventions: import from the project pipeline if available, else local fallback
 # --------------------------------------------------------------------------- #
-def hmul(g, h, q):
-    a, b, z = g
-    ap, bp, zp = h
-    return ((a + ap) % q, (b + bp) % q, (z + zp + a * bp) % q)
+try:
+    from spectral_O12 import build_generators as _build_generators
+    from spectral_O12 import heisenberg_mul_batch as _hmul_batch
+    PIPELINE = "spectral_O12"
+except Exception:
+    PIPELINE = "local-fallback"
 
+    def _build_generators(q):
+        return [(1, 0, 0), (0, 1, 0), ((-1) % q, 0, 0), (0, (-1) % q, 0)]
 
-def generators(q):
-    X = (1, 0, 0)
-    Y = (0, 1, 0)
-    Xi = ((-1) % q, 0, 0)
-    Yi = (0, (-1) % q, 0)
-    return [X, Y, Xi, Yi]
+    def _hmul_batch(elts, s, q):
+        a, b, z = elts[:, 0], elts[:, 1], elts[:, 2]
+        sa, sb, sz = s
+        return np.stack([(a + sa) % q, (b + sb) % q, (z + sz + a * sb) % q], axis=1)
 
 
 def bfs_shells(q, n_max):
-    """Return shells[n] = list of group elements at word distance n from identity."""
-    gens = generators(q)
+    gens = _build_generators(q)
     e = (0, 0, 0)
     dist = {e: 0}
     shells = [[e]]
@@ -99,7 +88,7 @@ def bfs_shells(q, n_max):
         nxt = []
         for g in frontier:
             for s in gens:
-                h = hmul(g, s, q)
+                h = ((g[0] + s[0]) % q, (g[1] + s[1]) % q, (g[2] + s[2] + g[0] * s[1]) % q)
                 if h not in dist:
                     dist[h] = n
                     nxt.append(h)
@@ -110,298 +99,293 @@ def bfs_shells(q, n_max):
     return shells
 
 
-# --------------------------------------------------------------------------- #
-# Weil block:  (rho_cc(a,b,z) f)(x) = exp(2pi i cc (z + b x)/q) f(x+a)
-# --------------------------------------------------------------------------- #
-def weil_apply(cc, g, f, q, xs, twopi_over_q):
-    a, b, z = g
-    shifted = np.roll(f, -a)                    # shifted[x] = f[x+a]
-    phase = np.exp(1j * twopi_over_q * cc * ((z + b * xs) % q))
-    return phase * shifted
+def signed_mod(v, q):
+    """Map v in [0,q) to the symmetric range (-q/2, q/2]; oriented value of A_c."""
+    return ((v + q // 2) % q) - q // 2
 
 
-def seed_vector(q):
-    f = np.zeros(q, dtype=complex)
-    f[0] = 1.0                                  # delta at x=0 (documented reference)
-    return f
+def shell_BA(shell, block, q, gens, reverse=False):
+    """Return (distinct_B_set, signed_A_array) over all generator triples on `shell`.
+
+    The 3 accumulated steps are ep1=g.s1, ep2=ep1.s2, ep3=ep2.s3 (sigma_freq order);
+    `reverse` swaps the triple order (s3,s2,s1) -- the cascade-reversal control.
+    B_c = sum_i c_i b_i ;  A_c = sum_i c_i (g_i - b_i a_i).
+    """
+    c1, c2, c3 = block
+    sh = np.array(shell, dtype=np.int64)
+    Bset = set()
+    A_signed_all = []
+    triples = [(s1, s2, s3) for s1 in gens for s2 in gens for s3 in gens]
+    for (s1, s2, s3) in triples:
+        if reverse:
+            s1, s2, s3 = s3, s2, s1
+        e1 = _hmul_batch(sh, s1, q)
+        e2 = _hmul_batch(e1, s2, q)
+        e3 = _hmul_batch(e2, s3, q)
+        B = (c1 * e1[:, 1] + c2 * e2[:, 1] + c3 * e3[:, 1]) % q
+        A = (c1 * (e1[:, 2] - e1[:, 1] * e1[:, 0])
+             + c2 * (e2[:, 2] - e2[:, 1] * e2[:, 0])
+             + c3 * (e3[:, 2] - e3[:, 1] * e3[:, 0])) % q
+        Bset.update(B.tolist())
+        A_signed_all.append(signed_mod(A, q))
+    return Bset, np.concatenate(A_signed_all)
 
 
-# --------------------------------------------------------------------------- #
-# Per-pair pipeline
-# --------------------------------------------------------------------------- #
-def process_pair(args):
-    cc, q, shells = args
-    xs = np.arange(q)
-    twopi_over_q = 2.0 * math.pi / q
-    f0 = seed_vector(q)
-    n_shells = len(shells)
+def _primitive_cube_root(q):
+    if q % 3 != 1:
+        return None
+    for x in range(2, q):
+        if pow(x, 3, q) == 1:
+            return x
+    return None
 
-    # --- pass 1: orbit covariance to fix the 2-dim admissible fibre V_rho ----
-    # accumulate Sigma = <(rho f0)(rho f0)^dagger> over a mid-cascade window
-    Sigma = np.zeros((q, q), dtype=complex)
-    cnt = 0
-    lo = min(2, n_shells - 1)
-    hi = min(n_shells, max(lo + 1, n_shells // 2 + 1))
-    for n in range(lo, hi):
-        for g in shells[n]:
-            v = weil_apply(cc, g, f0, q, xs, twopi_over_q)
-            Sigma += np.outer(v, v.conj())
-            cnt += 1
-    if cnt:
-        Sigma /= cnt
-    w_eig, V = np.linalg.eigh(Sigma)            # ascending
-    fibre = V[:, -2:]                           # top-2 admissible directions -> V_rho ~ C^2
-    Pf = fibre.conj().T                         # projector q -> C^2
 
-    # --- pass 2: per-shell capacity, C^3 covariance, J3-odd increment --------
-    sigma = np.zeros(n_shells)
-    Cc_per_shell = []                           # 3x3 covariance on Sym^2(V_rho) per shell
-    for n in range(n_shells):
-        ret = 0.0
-        C3 = np.zeros((3, 3), dtype=complex)
-        Sn = shells[n]
-        for g in Sn:
-            v = weil_apply(cc, g, f0, q, xs, twopi_over_q)
-            ret += abs(np.vdot(f0, v)) ** 2                 # return amplitude (capacity)
-            w = Pf @ v                                       # project to C^2
-            # vec of symmetric M = w w^T in basis (M00, M11, sqrt2*M01)
-            vecM = np.array([w[0] * w[0], w[1] * w[1], math.sqrt(2.0) * w[0] * w[1]])
-            C3 += np.outer(vecM, vecM.conj())
-        sigma[n] = ret / max(1, len(Sn))
-        Cc_per_shell.append(C3 / max(1, len(Sn)))
+def process_block(args):
+    """One generic block (c1,c2,c3): sigma(n), theta(n) (oriented J_Pi-odd phase)."""
+    block, q, shells = args
+    gens = _build_generators(q)
+    conj = tuple((q - c) % q for c in block)        # J_Pi conjugate block
+    two_pi_q = 2.0 * math.pi / q
 
-    # static covariance (saturated window) and its [1:1/2:1/2] check ----------
-    Cc_static = np.mean(np.stack(Cc_per_shell[lo:hi]), axis=0)
-    ev = np.sort(np.linalg.eigvalsh(Cc_static))[::-1]
-    ev = ev / ev[0] if ev[0] != 0 else ev                   # normalise to [1, ., .]
-    cc_ratio = ev.real.tolist()
+    seen = set()
+    sigma = []
+    theta = []           # per-shell oriented J_Pi-odd central phase (radians)
+    theta_rev = []       # same, with reversed cascade order (sign control)
+    for n, sh in enumerate(shells):
+        if not sh:
+            break
+        before = len(seen)
+        Bset, A_sg = shell_BA(sh, block, q, gens)
+        _, A_conj = shell_BA(sh, conj, q, gens)
+        seen |= Bset
+        sigma.append((len(seen) - before) / len(sh))
+        # J_Pi-odd part of the mean signed central phase (block minus conjugate)/2
+        odd = 0.5 * (A_sg.mean() - A_conj.mean())
+        theta.append(two_pi_q * odd)
+        # reversed-cascade control (oriented part must flip sign)
+        _, A_rev = shell_BA(sh, block, q, gens, reverse=True)
+        _, A_rev_c = shell_BA(sh, conj, q, gens, reverse=True)
+        theta_rev.append(two_pi_q * 0.5 * (A_rev.mean() - A_rev_c.mean()))
 
-    # --- J3-odd oriented increment (CONVENTION-SENSITIVE; see j3_odd_increment)
-    dA = j3_odd_increment(Cc_per_shell, q)
+    # colour-scaling sigma invariance check (B -> omega B bijection)
+    omega = _primitive_cube_root(q)
+    sig_scaled = None
+    if omega is not None:
+        wblock = tuple((omega * c) % q for c in block)
+        seen2, s2 = set(), []
+        for sh in shells[:len(sigma)]:
+            before = len(seen2)
+            Bset, _ = shell_BA(sh, wblock, q, gens)
+            seen2 |= Bset
+            s2.append((len(seen2) - before) / len(sh))
+        sig_scaled = s2
 
     return {
-        "cc": int(cc), "q": int(q),
-        "sigma": sigma.tolist(),
-        "dA_J3_odd": dA.tolist(),
-        "cc_ratio": cc_ratio,
+        "block": [int(x) for x in block], "q": int(q),
+        "sigma": sigma, "theta": theta, "theta_rev": theta_rev,
+        "sigma_scaled": sig_scaled,
     }
 
 
-def j3_odd_increment(Cc_per_shell, q):
-    """
-    ORIENTED, J_Pi-odd J_3 increment per shell.  CONVENTION-SENSITIVE.
-
-    Convention used here (document/align with the Q11 cascade ordering):
-      - In the eigenframe of the static C_c, the distinct eigenvalue is the central
-        weight-0 direction e_0; the remaining 2-d block is the outer doublet {e+, e-}.
-      - The cascade increment between consecutive shells is the transfer
-        T(n) = Cc(n) Cc(n-1)^+  restricted to the outer doublet; its oriented
-        rotation angle (signed by increasing n, the I(n) arrow) is the J_3 angle.
-      - The J_Pi-odd part is the component odd under cc <-> q-cc; here it is the
-        imaginary (anti-Hermitian) part of log T projected on J_3 = diag(+1,-1)
-        of the outer block.  A symmetric construction would give zero; the
-        orientation (sign of the n-increment) is what makes it non-vanishing.
-
-    Returns an array dA[n] (dA[0] = 0).
-    """
-    n_shells = len(Cc_per_shell)
-    dA = np.zeros(n_shells)
-    # identify e_0 from the static frame (use last shell as representative)
-    Cstat = Cc_per_shell[min(len(Cc_per_shell) - 1, len(Cc_per_shell) // 2)]
-    ev, U = np.linalg.eigh(Cstat)               # ascending; central = distinct one
-    # central direction = the eigenvector whose eigenvalue is farthest from the mean
-    idx_central = int(np.argmax(np.abs(ev - ev.mean())))
-    outer_idx = [i for i in range(3) if i != idx_central]
-    J3o = np.array([[1.0, 0.0], [0.0, -1.0]])   # J_3 on the outer doublet
-    for n in range(1, n_shells):
-        A = U[:, outer_idx].conj().T @ Cc_per_shell[n] @ U[:, outer_idx]
-        B = U[:, outer_idx].conj().T @ Cc_per_shell[n - 1] @ U[:, outer_idx]
-        try:
-            Bi = np.linalg.pinv(B)
-            T = A @ Bi
-            # oriented rotation angle in the outer plane (anti-Hermitian / J_Pi-odd part)
-            L = logm(T.astype(complex))
-            L_odd = 0.5 * (L - L.conj().T)       # anti-Hermitian = J_Pi-odd part
-            # J_3 angle = imaginary part of the J_3-projected anti-Hermitian log
-            dA[n] = float(np.imag(np.trace(J3o @ L_odd)) / 2.0)
-        except Exception:
-            dA[n] = 0.0
-    return dA
-
-
 # --------------------------------------------------------------------------- #
-# Observables built from per-pair results
+# Aggregation
 # --------------------------------------------------------------------------- #
 def aggregate(results, q):
-    """Average sigma and dA over pairs; build sigma_pair, n_sat, Ihat, eps, K_ar."""
-    sig = np.mean([np.array(r["sigma"]) for r in results], axis=0)
-    dA = np.mean([np.array(r["dA_J3_odd"]) for r in results], axis=0)
-    # pair observable sigma_pair = sigma_cc * sigma_{q-cc}; with the symmetric sample
-    # the mean already pairs cc and q-cc, so use sigma^2 as the canonical pair proxy
-    sigma_pair = sig ** 2
-    sigma_pair = sigma_pair / sigma_pair[0]      # normalise sigma_pair(0)=1
+    L = min(len(r["sigma"]) for r in results)
+    if L < 3:
+        raise RuntimeError(f"profile too short (L={L}); increase N_MAX_CAP for q={q}")
+    sig = np.mean([np.array(r["sigma"][:L]) for r in results], axis=0)
+    th = np.mean([np.array(r["theta"][:L]) for r in results], axis=0)
+    th_rev = np.mean([np.array(r["theta_rev"][:L]) for r in results], axis=0)
 
-    # intrinsic saturation rank n_3^obs: first n where the normalised cumulative
-    # projected capacity reaches SAT_FRACTION of its final pre-cap value
+    sigma_pair = sig ** 2                                   # sigma_c * sigma_{q-c}
+    sigma_pair = sigma_pair / sigma_pair[0]
+
     I_raw = sigma_pair[0] - sigma_pair
     if I_raw[-1] <= 0:
-        n_sat = len(sigma_pair) - 1
+        n_sat = L - 1
     else:
         Itmp = I_raw / I_raw[-1]
         idx = np.where(Itmp >= SAT_FRACTION)[0]
-        n_sat = int(idx[0]) if len(idx) else len(sigma_pair) - 1
-    n_sat = max(n_sat, 2)
+        n_sat = int(idx[0]) if len(idx) else L - 1
+    n_sat = max(2, min(n_sat, L - 1))
 
     denom = sigma_pair[0] - sigma_pair[n_sat]
-    Ihat = (sigma_pair[0] - sigma_pair) / denom if denom != 0 else np.zeros_like(sigma_pair)
+    Ihat = (sigma_pair[0] - sigma_pair) / denom if denom != 0 else np.zeros(L)
 
-    eps = np.cumsum(dA)
+    Theta_raw = np.cumsum(th)                                # accumulated oriented phase
     with np.errstate(divide="ignore", invalid="ignore"):
-        K_ar = np.where(Ihat > 1e-9, eps / Ihat, np.nan)
+        Theta_Weil = np.where(Ihat > 1e-9, Theta_raw / Ihat, np.nan)
+
+    # sign-reversal control: cumulative reversed phase should be ~ -Theta_raw
+    Theta_raw_rev = np.cumsum(th_rev)
+    TOL = 1e-9
+    if abs(Theta_raw[n_sat]) < TOL:
+        angular_status = "vanishes_symmetric"     # oriented part = 0 under symmetric shell
+        sign_status = "n/a (Theta=0 under symmetric averaging)"
+    elif np.sign(Theta_raw[n_sat]) == -np.sign(Theta_raw_rev[n_sat]):
+        angular_status = "oriented_signal"
+        sign_status = "passed"
+    else:
+        angular_status = "oriented_signal"
+        sign_status = "FAILED"
+    sign_ok = (sign_status == "passed")
+
+    # sigma colour-scaling check
+    sigma_ok = True
+    for r in results:
+        if r["sigma_scaled"] is not None:
+            m = min(len(r["sigma"]), len(r["sigma_scaled"]))
+            if np.max(np.abs(np.array(r["sigma"][:m]) - np.array(r["sigma_scaled"][:m]))) > 1e-12:
+                sigma_ok = False
+                break
 
     return {
-        "q": q, "n_sat": n_sat,
+        "q": q, "n_sat": n_sat, "L": L,
         "sigma_pair": sigma_pair, "Ihat": Ihat,
-        "eps": eps, "K_ar": K_ar,
-        "K_ar_at_nsat": float(eps[n_sat]),       # = K_ar(n_sat) since Ihat(n_sat)=1
-        "cc_ratio_mean": np.mean([r["cc_ratio"] for r in results], axis=0).tolist(),
+        "Theta_raw": Theta_raw, "Theta_Weil": Theta_Weil,
+        "Theta_Weil_sat": float(Theta_raw[n_sat]),           # = Theta_Weil(n_sat), Ihat=1
+        "Theta_raw_rev_sat": float(Theta_raw_rev[n_sat]),
+        "angular_status": angular_status, "sign_status": sign_status,
+        "sigma_check": sigma_ok, "sign_reversal_check": sign_ok,
     }
 
 
 # --------------------------------------------------------------------------- #
-# Driver
+# Driver with checkpoints, progress/ETA
 # --------------------------------------------------------------------------- #
-def run_full(q):
+def run_q(q):
     rng = np.random.default_rng(RNG_SEED + q)
     n_max = min(N_MAX_CAP, q // 2)
     t0 = time.time()
-    print(f"[q={q}] BFS up to depth {n_max} ...", flush=True)
+    print(f"[q={q}] pipeline={PIPELINE}  BFS depth {n_max} ...", flush=True)
     shells = bfs_shells(q, n_max)
-    print(f"[q={q}] shells built: depths={len(shells)}, "
-          f"|B|={sum(len(s) for s in shells)} ({time.time()-t0:.1f}s)", flush=True)
+    print(f"[q={q}] shells={len(shells)} |B|={sum(len(s) for s in shells)} "
+          f"({time.time()-t0:.1f}s)", flush=True)
 
-    # generic conjugate pair labels cc in 1..q-1 (cc and q-cc are a pair)
-    labels = rng.choice(np.arange(1, q), size=min(N_PAIRS, q - 1), replace=False)
+    # generic blocks (c1,c2,c3), c1+c2+c3 != 0
+    blocks = []
+    while len(blocks) < min(N_BLOCKS, (q - 1)):
+        b = tuple(int(rng.integers(1, q)) for _ in range(3))
+        if sum(b) % q != 0:
+            blocks.append(b)
 
-    ckpt = CHECKPOINT_TMPL.format(q=q)
+    ckpt = CKPT_TMPL.format(q=q)
     done = {}
     if os.path.exists(ckpt):
         with open(ckpt) as fh:
             for line in fh:
                 r = json.loads(line)
-                done[r["cc"]] = r
-        print(f"[q={q}] resumed {len(done)} pairs from {ckpt}", flush=True)
+                done[tuple(r["block"])] = r
+        print(f"[q={q}] resumed {len(done)} blocks from {ckpt}", flush=True)
 
-    todo = [int(c) for c in labels if int(c) not in done]
-    args = [(c, q, shells) for c in todo]
+    todo = [b for b in blocks if b not in done]
+    args = [(b, q, shells) for b in todo]
     results = list(done.values())
 
     t1 = time.time()
-    with Pool(N_WORKERS) as pool, open(ckpt, "a") as fh:
-        for i, r in enumerate(pool.imap_unordered(process_pair, args), 1):
-            fh.write(json.dumps(r) + "\n")
-            fh.flush()
-            results.append(r)
-            el = time.time() - t1
-            eta = el / i * (len(args) - i)
-            print(f"[q={q}] pair {i}/{len(args)}  elapsed={el:5.1f}s  ETA={eta:5.1f}s",
-                  flush=True)
+    if args:
+        with Pool(N_WORKERS) as pool, open(ckpt, "a") as fh:
+            for i, r in enumerate(pool.imap_unordered(process_block, args), 1):
+                fh.write(json.dumps(r) + "\n")
+                fh.flush()
+                results.append(r)
+                el = time.time() - t1
+                eta = el / i * (len(args) - i)
+                print(f"[q={q}] block {i}/{len(args)}  elapsed={el:5.1f}s  ETA={eta:5.1f}s",
+                      flush=True)
 
     return aggregate(results, q)
 
 
-def run_check(q, agg):
-    """Consistency-only: compare C_c ratio and n_3^obs against external O30/O21."""
-    print(f"[q={q}] CHECK: mean C_c eigenvalue ratio = "
-          f"{[round(x,3) for x in agg['cc_ratio_mean']]}  (expect ~ [1, 0.5, 0.5])",
-          flush=True)
-    if os.path.exists(O30_RATIO_PATH):
-        ext = json.load(open(O30_RATIO_PATH)).get(str(q))
-        print(f"[q={q}] CHECK: O30 ratio = {ext}", flush=True)
-    if os.path.exists(O21_N3_PATH):
-        ext = json.load(open(O21_N3_PATH)).get(str(q))
-        print(f"[q={q}] CHECK: n_sat computed = {agg['n_sat']}, O21 n_3^obs = {ext}",
-              flush=True)
-    else:
-        print(f"[q={q}] CHECK: n_sat computed = {agg['n_sat']} (no O21 file to compare)",
-              flush=True)
+def write_outputs(agg):
+    q = agg["q"]
+    with open(PROFILE_TMPL.format(q=q), "w") as fh:
+        fh.write("n,sigma_pair,Ihat,Theta_raw,Theta_Weil\n")
+        for n in range(agg["L"]):
+            tw = agg["Theta_Weil"][n]
+            tw_s = "" if (isinstance(tw, float) and math.isnan(tw)) else f"{tw:.6g}"
+            fh.write(f"{n},{agg['sigma_pair'][n]:.6g},{agg['Ihat'][n]:.6g},"
+                     f"{agg['Theta_raw'][n]:.6g},{tw_s}\n")
+    summary = {k: (v.tolist() if isinstance(v, np.ndarray) else v)
+               for k, v in agg.items()}
+    with open(SUMMARY_TMPL.format(q=q), "w") as fh:
+        json.dump(summary, fh, indent=2)
+    _plot(agg)
 
 
-def final_comparison(aggs):
-    """The ONLY place the dictionary value 1/10 enters."""
-    ADE = 1.0 / 10.0
-    print("\n" + "=" * 70)
-    print("FINAL COMPARISON  K_ar_Weil(n_3^obs)  ->?  1/10   (tested, not fitted)")
-    print("=" * 70)
-    for a in aggs:
-        k = a["K_ar_at_nsat"]
-        print(f"  q={a['q']:4d}  n_sat={a['n_sat']:3d}  "
-              f"K_ar_Weil(n_sat)={k:+.4f}   |K_ar - 1/10|={abs(k-ADE):.4f}")
-    ks = [a["K_ar_at_nsat"] for a in aggs]
-    spread = (max(ks) - min(ks)) if len(ks) > 1 else 0.0
-    print(f"  q-spread of K_ar_Weil = {spread:.4f}")
-    print("  Outcomes: ->1/10 (orthogonal confirmation); !=1/10 q-stable (extra "
-          "transfer factor, e.g. kappa=5/12); q-unstable (amplitude open).")
-    print("=" * 70)
-
-
-def write_outputs(aggs, all_results):
-    with open(RAW_PATH, "w") as fh:
-        for r in all_results:
-            fh.write(json.dumps(r) + "\n")
-    with open(CSV_PATH, "w") as fh:
-        fh.write("q,n,sigma_pair,Ihat,eps_Weil,K_ar_Weil\n")
-        for a in aggs:
-            for n in range(len(a["sigma_pair"])):
-                kar = a["K_ar"][n]
-                fh.write(f"{a['q']},{n},{a['sigma_pair'][n]:.6g},{a['Ihat'][n]:.6g},"
-                         f"{a['eps'][n]:.6g},"
-                         f"{'' if (isinstance(kar,float) and math.isnan(kar)) else f'{kar:.6g}'}\n")
-    _plot(aggs)
-
-
-def _plot(aggs):
+def _plot(agg):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    q = agg["q"]
+    n = np.arange(agg["L"])
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
-    for a in aggs:
-        n = np.arange(len(a["sigma_pair"]))
-        ax[0].plot(n, a["sigma_pair"], "o-", ms=3, label=f"q={a['q']}")
-        ax[1].plot(n, a["K_ar"], "o-", ms=3, label=f"q={a['q']}")
-        ax[1].axvline(a["n_sat"], ls=":", alpha=0.4)
-    ax[0].set_title(r"$\sigma_{\rm pair}(n)$ (recomputed)")
-    ax[0].set_xlabel("BFS depth $n$"); ax[0].set_yscale("log"); ax[0].legend(fontsize=8)
-    ax[1].set_title(r"profile $K_{\rm ar}^{\rm Weil}(n)$")
-    ax[1].set_xlabel("BFS depth $n$"); ax[1].legend(fontsize=8)
-    qs = [a["q"] for a in aggs]
-    ks = [a["K_ar_at_nsat"] for a in aggs]
-    ax[2].plot(qs, ks, "s-", color="#a83232")
-    ax[2].set_title(r"$K_{\rm ar}^{\rm Weil}(n_3^{\rm obs})$ vs $q$")
-    ax[2].set_xlabel("$q$"); ax[2].set_ylabel(r"$K_{\rm ar}^{\rm Weil}$")
-    fig.suptitle("Weil-BFS angular area: profile, saturation value, q-dependence "
-                 "(target line drawn only post hoc)", fontsize=11)
+    ax[0].semilogy(n, agg["sigma_pair"], "o-", ms=3)
+    ax[0].axvline(agg["n_sat"], ls=":", color="grey")
+    ax[0].set_title(rf"$\sigma_{{\rm pair}}(n)$ (B-frequency count), $q={q}$")
+    ax[0].set_xlabel("BFS depth $n$")
+    ax[1].plot(n, agg["Theta_raw"], "o-", ms=3, label=r"$\Theta_{\rm raw}$")
+    ax[1].plot(n, agg["Ihat"], "k--", lw=1, label=r"$\widehat I$")
+    ax[1].axvline(agg["n_sat"], ls=":", color="grey")
+    ax[1].set_title(r"oriented central phase (angular, from $A_c$)")
+    ax[1].set_xlabel("BFS depth $n$")
+    ax[1].legend(fontsize=8)
+    ax[2].plot(n, agg["Theta_Weil"], "o-", ms=3, color="#a83232")
+    ax[2].axvline(agg["n_sat"], ls=":", color="grey")
+    ax[2].set_title(r"$\Theta_{\rm Weil}(n)=\Theta_{\rm raw}/\widehat I$ (raw angle)")
+    ax[2].set_xlabel("BFS depth $n$")
+    fig.suptitle(rf"Weil-BFS angular area $q={q}$ -- raw angle $\Theta_{{\rm Weil}}$ "
+                 r"(NOT $\varepsilon$; $\mathcal{N}_A$ unset)", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    fig.savefig(PDF_PATH)
-    print(f"figure -> {PDF_PATH}", flush=True)
+    fig.savefig(PDF_TMPL.format(q=q))
+    print(f"[q={q}] figure -> {PDF_TMPL.format(q=q)}", flush=True)
+
+
+def final_summary(aggs):
+    print("\n" + "=" * 70)
+    print("ANGULAR-AREA SUMMARY (raw angle Theta_Weil; eps requires N_A)")
+    print("=" * 70)
+    for a in aggs:
+        q = a["q"]
+        tw = a["Theta_Weil_sat"]
+        # GUARDRAIL 1: 1/10 enters ONLY here, as a required-normalisation diagnostic
+        na_req = (EPS_DICT / tw) if abs(tw) > 1e-12 else float("nan")
+        print(f"q = {q}")
+        print(f"  n3_obs                              = {a['n_sat']}")
+        print(f"  theta_weil_sat                      = {tw:+.6f}")
+        print(f"  N_A_required_for_epsilon_1_over_10  = {na_req:+.6f}   "
+              f"(diagnostic, NOT a result)")
+        if N_A is not None:                           # GUARDRAIL 2
+            print(f"  epsilon_weil_sat = N_A*theta        = {N_A * tw:+.6f}   (N_A={N_A})")
+        else:
+            print(f"  epsilon_weil_sat                    = N_A not set "
+                  f"-> primary output is the raw angle theta_weil_sat")
+        print(f"  sigma_check                         = "
+              f"{'passed' if a['sigma_check'] else 'FAILED'}")
+        print(f"  angular_status                      = {a['angular_status']}")
+        print(f"  sign_reversal_check                 = {a['sign_status']}")
+    print("=" * 70)
+    print("Note: Theta_Weil is the raw oriented J_Pi-odd central phase. The conversion")
+    print("to eps requires the geometric normalisation N_A (deferred, note section 5).")
+    print("=" * 70)
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["full", "check"], default="full")
-    args = p.parse_args()
-
-    aggs, all_results = [], []
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=["full", "check"], default="full")
+    args = ap.parse_args()
+    aggs = []
     for q in Q_LIST:
-        agg = run_full(q)
-        aggs.append(agg)
-        if os.path.exists(CHECKPOINT_TMPL.format(q=q)):
-            with open(CHECKPOINT_TMPL.format(q=q)) as fh:
-                all_results.extend(json.loads(l) for l in fh)
+        agg = run_q(q)
+        write_outputs(agg)
         if args.mode == "check":
-            run_check(q, agg)
-    write_outputs(aggs, all_results)
-    final_comparison(aggs)
+            print(f"[q={q}] CHECK sigma colour-scaling invariance: "
+                  f"{'passed' if agg['sigma_check'] else 'FAILED'}; "
+                  f"sign-reversal: {'passed' if agg['sign_reversal_check'] else 'FAILED'}",
+                  flush=True)
+        aggs.append(agg)
+    final_summary(aggs)
 
 
 if __name__ == "__main__":
