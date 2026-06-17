@@ -12,27 +12,36 @@ DESIGN
 ------
 Two layers, deliberately separated:
 
-  1. Chiral-protocol layer (this file, fully implemented and validated by construction):
-     the measured object with the conjugate weight character chi_m*, the gamma5 dressing,
-     the eta_m convention phase, the cumulative profiles, and the mandatory controls C1-C5.
+  1. Primary layer (this file, fully implemented and validated by construction): the UNWEIGHTED
+     chiral-dressed measured object <gamma5 (2pi/q) Delta A_c>_{partial+} -- the direct frontier
+     observable of the Q14 operator coefficient alpha -- and its controls C_raw, C_sym, C_rev. No
+     chi_m weight enters the primary criterion.
 
-  2. Corpus-primitive backend (abstract, MUST be wired to the existing q11_oriented_frontier
-     code): group enumeration, admissible generators, BFS metric, A_c / B_c, the metaplectic
-     weight characters chi_m, the gamma5 chiral assignment, and the capacity normalisation.
-     Reference implementations are given for the paper-defined quantities (A_c, B_c, Delta A_c)
-     so they can be checked against the existing code; the genuinely corpus-specific primitives
-     raise NotImplementedError until wired, rather than being guessed.
+  2. Auxiliary chi_m representation diagnostics (reported, not the N_A criterion): the weighted
+     dressed/undressed objects with expected phi-relations of OPPOSITE sign
+     (dressed Theta_m = +eta_m* Theta_{-m}; undressed E_m = -eta_m* E_{-m}). The opposite signs are
+     the structural fingerprint of the gamma5 dressing. The weighted-dressed object is NOT the split
+     carrier: its split projection Theta_{+1} - Theta_{-1} vanishes for eta=1.
+
+  3. Corpus-primitive backend (abstract, MUST be wired to the existing q11_oriented_frontier code):
+     group enumeration, admissible generators, BFS metric, A_c / B_c, gamma5 chiral assignment, the
+     capacity normalisation, and (for the auxiliary layer only) the metaplectic weight characters
+     chi_m. Reference implementations are given for A_c, B_c, Delta A_c; the genuinely
+     corpus-specific primitives raise NotImplementedError until wired, rather than being guessed.
 
 VALIDATION GATE
 ---------------
-Control C5 (raw control reproduces <Delta A_c>_{partial+} = 0 on q in {61,101,151}) is the
+Control C_raw (raw control reproduces <Delta A_c>_{partial+} = 0 on q in {61,101,151}) is the
 independent relation that certifies the group/fingerprint backend is correct. Do not trust any
-chiral signal until C5 passes.
+chiral signal until C_raw passes.
 
 INTERPRETATION GATE
 -------------------
-eta_m must be pinned by local inspection of the Weil-lift convention (chi_m o phi = eta_m chi_{-m})
-before the run is interpretable. The script refuses to emit a success verdict while eta_plus is None.
+The PRIMARY verdict is decidable WITHOUT eta_m: the measured object is unweighted. The new primary
+lock is gamma5 o phi = -gamma5 (Q11OF) and the consistency <gamma5 Delta A_c>_{partial+} <-> alpha
+(Q14 sec 6.3). eta_m is required only for the auxiliary chi_m relation checks, which are reported
+separately and left undecidable until the Weil-lift convention chi_m o phi = eta_m chi_{-m} is read
+off.
 
 CONVENTIONS
 -----------
@@ -44,6 +53,7 @@ outputs written to the current working directory.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import pickle
@@ -213,11 +223,12 @@ def build_frontiers(backend: CorpusBackend) -> dict[int, Frontier]:
 # ----------------------------------------------------------------------------------------------- #
 
 
-def _theta(backend: CorpusBackend, edges: list, m: int, dressed: bool) -> complex:
-    """Average of [gamma5] * chi_m* * (2 pi / q) * Delta A_c over a set of directed edges.
+def _theta_weighted(backend: CorpusBackend, edges: list, m: int, dressed: bool) -> complex:
+    """Average of [gamma5] * chi_m* * (2 pi / q) * Delta A_c. AUXILIARY (chi_m representation).
 
-    dressed=True  -> includes gamma5 (the physical signal and controls C1, C2, C3).
-    dressed=False -> omits gamma5 (control C4, the undressed null).
+    dressed=True  -> Theta_m^dr, expected relation Theta_m = +eta_m* Theta_{-m}.
+    dressed=False -> E_m^undr,   expected relation E_m    = -eta_m* E_{-m}.
+    These are a representation diagnostic only, NOT the N_A criterion (see module docstring).
     """
     if not edges:
         return 0.0 + 0.0j
@@ -232,39 +243,62 @@ def _theta(backend: CorpusBackend, edges: list, m: int, dressed: bool) -> comple
     return acc / len(edges)
 
 
-def theta_dressed_outgoing(backend: CorpusBackend, fr: Frontier, m: int) -> complex:
-    """Measured object Theta^{partial+}_{gamma5,m}(r)."""
-    return _theta(backend, fr.outgoing, m, dressed=True)
+def _theta_unweighted(backend: CorpusBackend, edges: list, dressed: bool) -> complex:
+    """Average of [gamma5] * (2 pi / q) * Delta A_c, NO chi_m weight. PRIMARY object.
 
-
-def theta_symmetrised(backend: CorpusBackend, fr: Frontier, m: int) -> complex:
-    """Control C1: <gamma5 chi_m* Delta A_c>_{partial+ U partial-}; must be ~ 0."""
-    return _theta(backend, fr.outgoing + fr.incoming, m, dressed=True)
-
-
-def theta_reversed_outgoing(backend: CorpusBackend, fr: Frontier, m: int) -> complex:
-    """Control C2 on the explicitly paired inverted frontier (partial+ S_r)^{-1}.
-
-    (partial+ S_r)^{-1} = {(g s, s^{-1}) : (g, s) in partial+ S_r}. The reversed edge of an
-    outgoing edge of S_r lives in partial- S_{r+1}, NOT partial- S_r, so we build the pairing
-    explicitly here rather than indexing partial- at the same r. Expect this = -Theta^{partial+}.
+    dressed=True  -> the measured signal <gamma5 Delta A_c> (the operator coefficient alpha).
+    dressed=False -> the raw control <Delta A_c> (phi-killed; backend-correctness gate).
     """
-    inv_edges = [(g * s, s.inverse()) for (g, s) in fr.outgoing]
-    return _theta(backend, inv_edges, m, dressed=True)
-
-
-def theta_undressed_outgoing(backend: CorpusBackend, fr: Frontier, m: int) -> complex:
-    """Control C4: undressed <chi_m* Delta A_c>_{partial+}; reported, never a physical signal."""
-    return _theta(backend, fr.outgoing, m, dressed=False)
-
-
-def theta_raw_outgoing(backend: CorpusBackend, fr: Frontier) -> complex:
-    """Control C5: raw <Delta A_c>_{partial+}; must reproduce 0 (Q11OF). m and chi omitted."""
-    if not fr.outgoing:
+    if not edges:
         return 0.0 + 0.0j
     q = backend.q
     pref = 2.0 * np.pi / q
-    return (pref * sum(backend.Delta_A_c(g, s) for (g, s) in fr.outgoing)) / len(fr.outgoing)
+    acc = 0.0 + 0.0j
+    for g, s in edges:
+        w = backend.gamma5(g, s) if dressed else 1.0
+        acc += w * pref * backend.Delta_A_c(g, s)
+    return acc / len(edges)
+
+
+def _inverted(fr: Frontier) -> list:
+    """Explicitly paired inverted frontier (partial+ S_r)^{-1} = {(g s, s^{-1})}."""
+    return [(g * s, s.inverse()) for (g, s) in fr.outgoing]
+
+
+# --- primary (unweighted) signal and controls ------------------------------------------------- #
+
+
+def theta_primary(backend: CorpusBackend, fr: Frontier) -> complex:
+    """Primary measured object Theta^{partial+}_{gamma5}(r) = <gamma5 (2pi/q) Delta A_c>."""
+    return _theta_unweighted(backend, fr.outgoing, dressed=True)
+
+
+def control_raw(backend: CorpusBackend, fr: Frontier) -> complex:
+    """C_raw: <(2pi/q) Delta A_c>_{partial+}; must reproduce 0 (Q11OF). Backend-correctness gate."""
+    return _theta_unweighted(backend, fr.outgoing, dressed=False)
+
+
+def control_sym(backend: CorpusBackend, fr: Frontier) -> complex:
+    """C_sym: <gamma5 (2pi/q) Delta A_c>_{partial+ U (partial+)^{-1}}; anti-bias, must be ~ 0."""
+    return _theta_unweighted(backend, fr.outgoing + _inverted(fr), dressed=True)
+
+
+def control_reversed(backend: CorpusBackend, fr: Frontier) -> complex:
+    """C_rev: signal on the inverted frontier; expect = -theta_primary (alpha_rev = -alpha)."""
+    return _theta_unweighted(backend, _inverted(fr), dressed=True)
+
+
+# --- auxiliary (chi_m representation) diagnostics --------------------------------------------- #
+
+
+def aux_dressed(backend: CorpusBackend, fr: Frontier, m: int) -> complex:
+    """Auxiliary Theta_m^dr; expected Theta_m = +eta_m* Theta_{-m}. Not the N_A criterion."""
+    return _theta_weighted(backend, fr.outgoing, m, dressed=True)
+
+
+def aux_undressed(backend: CorpusBackend, fr: Frontier, m: int) -> complex:
+    """Auxiliary E_m^undr; expected E_m = -eta_m* E_{-m}. Not the N_A criterion."""
+    return _theta_weighted(backend, fr.outgoing, m, dressed=False)
 
 
 # ----------------------------------------------------------------------------------------------- #
@@ -277,12 +311,15 @@ class ShellResult:
     r: int
     n_out: int
     n_in: int
-    theta_out: dict  # m -> Theta^{partial+}_{gamma5,m}
-    theta_sym: dict  # m -> C1
-    theta_rev: dict  # m -> C2 (on inverted frontier)
-    theta_undr: dict  # m -> C4
-    theta_raw: complex  # C5
+    # primary (unweighted)
+    theta_primary: complex  # <gamma5 (2pi/q) Delta A_c>_{partial+}
+    c_raw: complex  # <(2pi/q) Delta A_c>_{partial+}, must be 0
+    c_sym: complex  # symmetrised on partial+ U (partial+)^{-1}, must be 0
+    c_rev: complex  # on (partial+)^{-1}, expect = -theta_primary
     cap_incr: float  # Delta I_hat(r)
+    # auxiliary (chi_m representation), reported only
+    aux_dr: dict  # m -> Theta_m^dr,  expected Theta_m = +eta_m* Theta_{-m}
+    aux_undr: dict  # m -> E_m^undr,    expected E_m    = -eta_m* E_{-m}
 
 
 def evaluate_shell(backend: CorpusBackend, fr: Frontier, ms=(+1, -1)) -> ShellResult:
@@ -290,12 +327,13 @@ def evaluate_shell(backend: CorpusBackend, fr: Frontier, ms=(+1, -1)) -> ShellRe
         r=fr.r,
         n_out=len(fr.outgoing),
         n_in=len(fr.incoming),
-        theta_out={m: theta_dressed_outgoing(backend, fr, m) for m in ms},
-        theta_sym={m: theta_symmetrised(backend, fr, m) for m in ms},
-        theta_rev={m: theta_reversed_outgoing(backend, fr, m) for m in ms},
-        theta_undr={m: theta_undressed_outgoing(backend, fr, m) for m in ms},
-        theta_raw=theta_raw_outgoing(backend, fr),
+        theta_primary=theta_primary(backend, fr),
+        c_raw=control_raw(backend, fr),
+        c_sym=control_sym(backend, fr),
+        c_rev=control_reversed(backend, fr),
         cap_incr=backend.capacity_increment(fr.r),
+        aux_dr={m: aux_dressed(backend, fr, m) for m in ms},
+        aux_undr={m: aux_undressed(backend, fr, m) for m in ms},
     )
 
 
@@ -305,70 +343,80 @@ def evaluate_shell(backend: CorpusBackend, fr: Frontier, ms=(+1, -1)) -> ShellRe
 
 
 def cumulative_profiles(shells: list[ShellResult], ms=(+1, -1)):
-    """Return normalised and unnormalised cumulative profiles Theta^cum_{gamma5,m}(n).
+    """Cumulative profiles.
 
-    Normalised: (1 / I_hat(n)) sum_{r<=n} Theta^{partial+}(r) Delta I_hat(r).
-    Both forms returned so the normalisation cannot hide a small-depth artefact.
+    Primary: Theta^cum_{gamma5}(n) = (1/I_hat(n)) sum_{r<=n} theta_primary(r) Delta I_hat(r),
+    plus the unnormalised sum. Auxiliary: per-m dressed/undressed cumulatives (representation only).
     """
     shells = sorted(shells, key=lambda s: s.r)
-    out = {m: {"r": [], "cum_unnorm": [], "cum_norm": []} for m in ms}
-    for m in ms:
-        acc_w = 0.0 + 0.0j
-        acc_unw = 0.0 + 0.0j
-        cap_total = 0.0
-        for sh in shells:
-            acc_w += sh.theta_out[m] * sh.cap_incr
-            acc_unw += sh.theta_out[m]
-            cap_total += sh.cap_incr
-            out[m]["r"].append(sh.r)
-            out[m]["cum_unnorm"].append(acc_unw)
-            out[m]["cum_norm"].append(acc_w / cap_total if cap_total != 0 else 0.0 + 0.0j)
-    return out
+    primary = {"r": [], "cum_unnorm": [], "cum_norm": []}
+    aux_dr = {m: {"r": [], "cum_norm": []} for m in ms}
+    aux_undr = {m: {"r": [], "cum_norm": []} for m in ms}
+
+    acc_w = 0.0 + 0.0j
+    acc_unw = 0.0 + 0.0j
+    cap_total = 0.0
+    acc_dr = {m: 0.0 + 0.0j for m in ms}
+    acc_undr = {m: 0.0 + 0.0j for m in ms}
+    for sh in shells:
+        acc_w += sh.theta_primary * sh.cap_incr
+        acc_unw += sh.theta_primary
+        cap_total += sh.cap_incr
+        primary["r"].append(sh.r)
+        primary["cum_unnorm"].append(acc_unw)
+        primary["cum_norm"].append(acc_w / cap_total if cap_total != 0 else 0.0 + 0.0j)
+        for m in ms:
+            acc_dr[m] += sh.aux_dr[m] * sh.cap_incr
+            acc_undr[m] += sh.aux_undr[m] * sh.cap_incr
+            denom = cap_total if cap_total != 0 else 1.0
+            aux_dr[m]["r"].append(sh.r)
+            aux_dr[m]["cum_norm"].append(acc_dr[m] / denom)
+            aux_undr[m]["r"].append(sh.r)
+            aux_undr[m]["cum_norm"].append(acc_undr[m] / denom)
+    return {"primary": primary, "aux_dr": aux_dr, "aux_undr": aux_undr}
 
 
 def success_verdict(shells, cum, eta_plus: Optional[complex], tol: float):
-    """Evaluate C1-C5 and the success criterion.
+    """Evaluate the primary controls and verdict, plus the auxiliary chi_m relation checks.
 
-    Returns a dict of flags. The success verdict is None (undecidable) while eta_plus is None:
-    the run is computable but not interpretable until the Lemma 2 convention phase is pinned.
+    The PRIMARY verdict is independent of eta_plus: the measured object is unweighted. The
+    auxiliary chi_m relations require eta_plus and are reported separately (None until pinned).
     """
     flags = {}
 
-    # C1: symmetrised cancellation null on every shell.
-    flags["C1_symmetrised_null"] = all(
-        abs(sh.theta_sym[m]) <= tol for sh in shells for m in sh.theta_sym
+    # --- primary controls (unweighted) ------------------------------------------------------- #
+    # C_raw: <Delta A_c>_{partial+} = 0 (backend-correctness gate).
+    flags["C_raw_null"] = all(abs(sh.c_raw) <= tol for sh in shells)
+    # C_sym: symmetrised dressed cancellation null.
+    flags["C_sym_null"] = all(abs(sh.c_sym) <= tol for sh in shells)
+    # C_rev: signal on inverted frontier = -theta_primary (alpha_rev = -alpha).
+    flags["C_rev_signflip"] = all(
+        abs(sh.c_rev + sh.theta_primary) <= tol for sh in shells
     )
-    # C2: reversed-frontier sign flip Theta^{(partial+)^{-1}} = -Theta^{partial+}.
-    flags["C2_cascade_reversal"] = all(
-        abs(sh.theta_rev[m] + sh.theta_out[m]) <= tol for sh in shells for m in sh.theta_out
-    )
-    # C4: undressed profile re-pairs (does not carry the signal) -> compatible with 0.
-    flags["C4_undressed_null"] = all(
-        abs(sh.theta_undr[m]) <= tol for sh in shells for m in sh.theta_undr
-    )
-    # C5: raw control reproduces 0 (the independent backend-correctness gate).
-    flags["C5_raw_null"] = all(abs(sh.theta_raw) <= tol for sh in shells)
-
-    # Nonzero transverse signal somewhere.
-    flags["transverse_signal_present"] = any(
-        abs(v) > tol for v in cum[+1]["cum_norm"]
+    # Nonzero primary signal somewhere (shells, normalised, or unnormalised cumulative).
+    flags["signal_present"] = (
+        any(abs(sh.theta_primary) > tol for sh in shells)
+        or any(abs(v) > tol for v in cum["primary"]["cum_norm"])
+        or any(abs(v) > tol for v in cum["primary"]["cum_unnorm"])
     )
 
-    # C3: Theta^cum_{+1} = -eta_plus* Theta^cum_{-1}. Undecidable without eta_plus.
+    backend_ok = flags["C_raw_null"] and flags["C_sym_null"]
+    flags["verdict"] = bool(backend_ok and flags["signal_present"] and flags["C_rev_signflip"])
+
+    # --- auxiliary chi_m relation checks (representation only; require eta_plus) -------------- #
     if eta_plus is None:
-        flags["C3_weight_relation"] = None
-        flags["verdict"] = None  # not interpretable: pin eta_m first.
+        flags["aux_dressed_relation"] = None  # expected Theta_m = +eta* Theta_{-m}
+        flags["aux_undressed_relation"] = None  # expected E_m    = -eta* E_{-m}
         return flags
 
     eta_star = np.conjugate(eta_plus)
-    flags["C3_weight_relation"] = all(
-        abs(cp + eta_star * cm) <= tol
-        for cp, cm in zip(cum[+1]["cum_norm"], cum[-1]["cum_norm"])
+    flags["aux_dressed_relation"] = all(
+        abs(cp - eta_star * cm) <= tol  # dressed: PLUS sign -> cp = +eta* cm
+        for cp, cm in zip(cum["aux_dr"][+1]["cum_norm"], cum["aux_dr"][-1]["cum_norm"])
     )
-
-    backend_ok = flags["C5_raw_null"] and flags["C1_symmetrised_null"] and flags["C4_undressed_null"]
-    flags["verdict"] = bool(
-        backend_ok and flags["transverse_signal_present"] and flags["C3_weight_relation"]
+    flags["aux_undressed_relation"] = all(
+        abs(cp + eta_star * cm) <= tol  # undressed: MINUS sign -> cp = -eta* cm
+        for cp, cm in zip(cum["aux_undr"][+1]["cum_norm"], cum["aux_undr"][-1]["cum_norm"])
     )
     return flags
 
@@ -459,15 +507,24 @@ def plot_profiles(q: int, cum: dict) -> None:
     if not _HAVE_MPL:
         print(f"[q={q}] matplotlib unavailable; skipping figure.", flush=True)
         return
+    primary = cum["primary"]
+    rr = primary["r"]
     fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-    for m, style in ((+1, "-o"), (-1, "-s")):
-        rr = cum[m]["r"]
-        ax[0].plot(rr, np.real(cum[m]["cum_norm"]), style, label=f"m={m:+d} (norm)")
-        ax[1].plot(rr, np.real(cum[m]["cum_unnorm"]), style, label=f"m={m:+d} (unnorm)")
+    ax[0].plot(rr, np.real(primary["cum_norm"]), "-o", label="primary (norm)")
+    ax[1].plot(rr, np.real(primary["cum_unnorm"]), "-o", label="primary (unnorm)")
+    # auxiliary chi_m dressed cumulatives, for representation context only
+    for m, style in ((+1, "--^"), (-1, "--v")):
+        ax[0].plot(
+            cum["aux_dr"][m]["r"],
+            np.real(cum["aux_dr"][m]["cum_norm"]),
+            style,
+            alpha=0.5,
+            label=f"aux m={m:+d} (norm)",
+        )
     for a, title in zip(ax, ("normalised cumulative", "unnormalised cumulative")):
         a.axhline(0.0, color="k", lw=0.6)
         a.set_xlabel("BFS depth n")
-        a.set_ylabel(r"Re $\Theta^{\rm cum}_{\gamma_5,m}$")
+        a.set_ylabel(r"Re $\Theta^{\rm cum}_{\gamma_5}$")
         a.set_title(f"q={q}: {title}")
         a.legend()
     fig.tight_layout()
@@ -493,24 +550,29 @@ def main():
         "--eta-plus",
         type=complex,
         default=None,
-        help="Lemma 2 convention phase eta_{+1} (|eta|=1). Leave unset until pinned: "
-        "the run then computes but stays non-interpretable (verdict=None).",
+        help="Lemma 2 convention phase eta_{+1} (|eta|=1) for the AUXILIARY chi_m checks only. "
+        "The primary unweighted verdict does not need it; leave unset until the convention is pinned.",
     )
     ap.add_argument("--tol", type=float, default=1e-9)
     ap.add_argument("--workers", type=int, default=None)
     args = ap.parse_args()
 
+    if args.eta_plus is not None and abs(abs(args.eta_plus) - 1.0) > 1e-9:
+        ap.error("--eta-plus must satisfy |eta| = 1.")
+
     if args.eta_plus is None:
         print(
-            "WARNING: eta_plus not pinned. Profiles will be computed but the success verdict "
-            "is left undecidable (verdict=None) until the Weil-lift convention is read off.",
+            "NOTE: eta_plus not pinned. The PRIMARY verdict (unweighted <gamma5 Delta A_c>) is still "
+            "decidable. Only the auxiliary chi_m relation checks are left undecidable (None) until "
+            "the Weil-lift convention chi_m o phi = eta_m chi_{-m} is read off (Lemma 2).",
             flush=True,
         )
 
     summary = {}
     for q in args.q:
         # Wire CorpusBackend (or a subclass delegating to q11_oriented_frontier.py) here.
-        backend_factory = lambda q=q: CorpusBackend(q)
+        # functools.partial is picklable across ProcessPoolExecutor; a lambda is not.
+        backend_factory = functools.partial(CorpusBackend, q)
         shells, cum, flags = run_single_q(
             q, backend_factory, args.eta_plus, tol=args.tol, workers=args.workers
         )
