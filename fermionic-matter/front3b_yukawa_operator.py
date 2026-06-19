@@ -2,8 +2,10 @@
 
 Bias-independent, exact symbolic verification (no sampling) of the partial no-go that opens Front 3b: the
 squared projective residue E_Pi^2|gen determines the HERMITIAN SQUARE of the Yukawa morphism, not the
-morphism itself. The undetermined object is the chiral polar factor U_Pi, which carries the norm-branch,
-the sign of u, and the mixing phase.
+morphism itself. The undetermined object is the chiral polar factor U_Pi, which carries the chiral
+orientation, the relative generation phases, and the mixing; the overall norm lambda_Y is a SEPARATE
+positive scale of H_Pi (a unitary cannot carry it). The sign of u is seen by the level operator once an
+oriented J3-labelled basis is chosen; what is open is the physical orientation branch (e_+ <-> e_-).
 
 Setup. The projected Yukawa morphism is a chiral map Y_Pi : S_{L,Pi} (x) L_Y -> S_{R,Pi} (PYL, Beau2026pyl).
 Its left hermitian square H_Pi := Y_Pi^dag Y_Pi acts on the LEFT generation carrier. The Schur-residue
@@ -30,9 +32,10 @@ Results (all exact symbolic).
   (F) Mixing invisibility: the rotation family U(theta) leaves H invariant for all theta while Y(theta)
       sweeps a one-parameter family -- the mixing lives entirely in U_Pi.
 
-Conclusion (printed): E_Pi^2|gen fixes the squared Yukawa levels, but the chiral polar factor U_Pi -- with
-it the norm-branch, sign(u), and the mixing phase -- is free. Front 3b can close H_Pi = Y_Pi^dag Y_Pi; it
-cannot close Y_Pi unless U_Pi is fixed (Front 3c). No mass value is produced. No figures. English.
+Conclusion (printed): E_Pi^2|gen fixes the squared Yukawa levels, but the chiral polar factor U_Pi -- the
+chiral orientation and the mixing phase -- is free (the norm lambda_Y is a separate scale of H_Pi). Front 3b
+can close H_Pi = Y_Pi^dag Y_Pi; it cannot close Y_Pi unless U_Pi is fixed (Front 3c). No mass value is
+produced. No figures. English.
 """
 
 import sympy as sp
@@ -122,7 +125,8 @@ def main():
         print(f"  [{'PASS' if ok else 'FAIL'}]  {k}")
     print("=" * 92)
     print("RESULT: E_Pi^2|gen fixes the squared Yukawa LEVELS, not the morphism. The chiral polar factor")
-    print("        U_Pi (norm-branch, sign(u), mixing phase) is free. Front 3b closes H_Pi = Y_Pi^dag Y_Pi;")
+    print("        U_Pi (chiral orientation + mixing phase) is free; norm lambda_Y is a separate scale of H_Pi.")
+    print("        Front 3b closes H_Pi = Y_Pi^dag Y_Pi;")
     print("        it cannot close Y_Pi unless U_Pi is fixed (Front 3c).")
     print("ALL CHECKS PASS" if allok else "SOME CHECKS FAILED")
     return allok
