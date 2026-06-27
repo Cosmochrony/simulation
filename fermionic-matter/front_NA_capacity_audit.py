@@ -40,6 +40,53 @@ def _signed(v, q):
     return ((v + q // 2) % q) - q // 2
 
 
+def onset_generator_dependence(q=61):
+    """Shell-1 onset <|Delta A_c|>_d+ for several symmetric generating sets of Heis_3(Z/qZ).
+
+    Demonstrates that the closed onset 1/3 is the standard {+-X,+-Y} Cayley-frontier convention, NOT a
+    generator-set invariant (and a fortiori not a generation-count / Sym^2-dimension invariant): changing the
+    horizontal generating set changes the onset rational. Exact integer arithmetic (Fraction)."""
+    from collections import deque
+
+    def mul(g, s):
+        a, b, z = g
+        sa, sb, sz = s
+        return ((a + sa) % q, (b + sb) % q, (z + sz + a * sb) % q)
+
+    def onset(gens):
+        dist = {(0, 0, 0): 0}
+        dq = deque([(0, 0, 0)])
+        while dq:
+            g = dq.popleft()
+            if dist[g] >= 3:
+                continue
+            for s in gens:
+                h = mul(g, s)
+                if h not in dist:
+                    dist[h] = dist[g] + 1
+                    dq.append(h)
+        num = cnt = 0
+        for g, d in dist.items():
+            if d != 1:
+                continue
+            for s in gens:
+                h = mul(g, s)
+                if dist.get(h) == 2:
+                    num += abs(_signed((h[2] - g[2]) % q, q))
+                    cnt += 1
+        return Fraction(num, cnt)
+
+    X, Xi, Y, Yi = (1, 0, 0), (q - 1, 0, 0), (0, 1, 0), (0, q - 1, 0)
+    sets = {
+        "standard {+-X,+-Y}": [X, Xi, Y, Yi],
+        "{+-X,+-Y,+-(X+Y)}": [X, Xi, Y, Yi, (1, 1, 0), (q - 1, q - 1, 0)],
+        "{+-X,+-Y,+-2X}": [X, Xi, Y, Yi, (2, 0, 0), (q - 2, 0, 0)],
+        "{+-X,+-(X+Y)}": [X, Xi, (1, 1, 0), (q - 1, q - 1, 0)],
+        "{+-2X,+-Y}": [(2, 0, 0), (q - 2, 0, 0), Y, Yi],
+    }
+    return {name: onset(gens) for name, gens in sets.items()}
+
+
 def frontier_abs_dAc_exact(q11, q, mmax=6):
     """EXACT (rational) per-shell directed-frontier mean |Delta A_c| over the outgoing edges d+.
 
@@ -102,6 +149,11 @@ def main():
     onset = seqs[0][0]
     print(f"per-shell sequence q-independent across q={Q_LIST}: {q_independent}")
     print(f"saturation-onset increment <|Delta A_c|>_(shell 1) = {onset}  (exact)")
+    # generator-set dependence: the onset 1/3 is the standard {+-X,+-Y} convention, NOT a generator invariant
+    gd = onset_generator_dependence()
+    print("onset vs symmetric generating set (q=61):  " + ";  ".join(f"{k} -> {v}" for k, v in gd.items()))
+    print(f"  => onset is GENERATOR-SET DEPENDENT (1/3 is the standard campaign convention, not a generation/dim "
+          f"invariant); only eps and the ADE ratio are generator-independent")
     inv_onset = 1 / onset                                  # Fraction
     print(f"=> maximal-locking bound (onset)  theta_max = (2pi/q)*{onset} = 2pi/({inv_onset} q)")
     na_geom_coeff = EPS_DICT * inv_onset / TWO_PI           # coefficient of q in N_A^geom = (1/10)/theta_max
