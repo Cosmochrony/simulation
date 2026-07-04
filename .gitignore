@@ -1,3 +1,4 @@
 /.idea/
 /spectral/o26/o25_outputs/*.npz
 /gravity/q5a-o5/o25_outputs/*.npz
+/spectral/trajectory-entropy/traj_outputs/*.npz
