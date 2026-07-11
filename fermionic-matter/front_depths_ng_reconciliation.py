@@ -23,7 +23,7 @@ Corpus anchors (verified, not refitted):
   - Stratigraphy Beau2026a4 prop:threelevels / tab:threelevels : 2I ord-5 levels
     {20,24,30}, mult (54,25,40).
   - Relaxation Beau2026a5 def:nproj / eq:nproj-value / eq:mass-formula ; growth law
-    Lambda_proj(n)=c_chi(n)^2/A_min^2 ; cor:linear-law Lambda_proj ~ lambda_2(n).
+    Lambda_proj(n)=c_BI(n)^2/A_min^2 ; cor:linear-law Lambda_proj ~ lambda_2(n).
   - O16 Beau2026a20 : beta* = 1/(delta+1/2), delta_pair ~ 7.44 -> beta* ~ 0.127.
 """
 

@@ -13,8 +13,8 @@ and the symmetry pin c_2=1/2. The bracket is locked and published:
     cross (<=3)  <  cell (<=10)  <  REQUIRED (~64)  <  sat (diverges 83->354).
 
 This front leaves the static spectrum and tests the DYNAMICAL objects the corpus actually supplies:
-  (1) BI saturation        : the flux c_chi(n) saturates at the Born-Infeld ceiling beta_BI;
-  (2) c_chi bound          : Lambda_proj(n) = c_chi(n)^2/A_min^2, c_chi(n) ~ h(G(n)) (Cheeger);
+  (1) BI saturation        : the flux c_BI(n) saturates at the Born-Infeld ceiling beta_BI;
+  (2) c_BI bound          : Lambda_proj(n) = c_BI(n)^2/A_min^2, c_BI(n) ~ h(G(n)) (Cheeger);
   (3) relaxation fixed pt  : in the LPS/fixed-prime model Lambda_proj is ASYMPTOTICALLY STATIC
                              (Alon-Boppana / Ramanujan) -- approach to a single constant ceiling.
 
@@ -25,7 +25,7 @@ n_1<n_2<n_3 with Dn in [50,80] and correct order, from FORCED quantities only.
 Two -- and only two -- dynamical readings are testable:
 
   (R-parallel)   three saturation thresholds f_g on ONE saturating flow
-                 c_chi(n)/beta_BI = 1 - exp(-beta* n),   n_g = -log(1-f_g)/beta*.
+                 c_BI(n)/beta_BI = 1 - exp(-beta* n),   n_g = -log(1-f_g)/beta*.
                  The f_g forced by the generation-carrier generator J_3 = diag(0,1,-1)
                  (PYO weights w_g = {1, 1/2+u, 1/2-u}, u=1/10 -> {1, 3/5, 2/5}).
 
@@ -96,7 +96,7 @@ record("required tau:e gap lies in the open window [50,80] at b=0.127",
 
 # ===========================================================================
 # C1 -- R-parallel: three saturation thresholds on ONE BI flow.
-#   c_chi(n)/beta_BI = 1 - exp(-beta* n)  (saturating approach to the ceiling)
+#   c_BI(n)/beta_BI = 1 - exp(-beta* n)  (saturating approach to the ceiling)
 #   stabilise when the flow reaches the FORCED fraction f_g.  Forced f_g from
 #   the J_3 carrier: the three projected weights w_g, normalised to (0,1).
 # ===========================================================================

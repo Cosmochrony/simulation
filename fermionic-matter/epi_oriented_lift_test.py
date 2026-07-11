@@ -200,7 +200,7 @@ print("    kills e_0 and preserves the doublet -> it carries the correct SIGNATU
 print("  - SIGNATURE confirmed (qualitative): real split, central intact, doublet kept,")
 print("    J_Pi-odd. The cascade lift must be the J3-projection of d_tau.")
 print("  - AMPLITUDE eps = 1/10 reproduces ADE 3:2 but is a CALIBRATION, not a")
-print("    prediction: relating eps to the cascade normalisation (c_chi -> delta_pair")
+print("    prediction: relating eps to the cascade normalisation (c_BI -> delta_pair")
 print("    -> beta*) is the next step. (Note the proximity eps=0.10 vs beta*~0.126 is")
 print("    NOT established and likely dimensionally distinct -- to be ruled out, not in.)")
 print("=" * 72)

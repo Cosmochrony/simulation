@@ -176,13 +176,13 @@ if all_ok:
 
 # ------ 1c. Admissibility envelope ------
 
-print("\nAdmissibility envelope  A^max_n = c_chi / sqrt(lambda_n):")
+print("\nAdmissibility envelope  A^max_n = c_BI / sqrt(lambda_n):")
 for label, (lam, psi) in PW.items():
     psi_inf = np.max(np.abs(psi))
-    # A^max such that A_n * ||psi_n||_inf = c_chi / sqrt(lambda_n) * ||psi_n||_inf
+    # A^max such that A_n * ||psi_n||_inf = c_BI / sqrt(lambda_n) * ||psi_n||_inf
     # Effective amplitude A_n^eff = |a_n| * ||psi_n||_inf
-    # Constraint from DBI: A_n^eff <= c_chi / sqrt(lambda_n)
-    amax = f"c_chi / sqrt({lam:.4g})"
+    # Constraint from DBI: A_n^eff <= c_BI / sqrt(lambda_n)
+    amax = f"c_BI / sqrt({lam:.4g})"
     print(f"  {label:12s}: lambda={lam:.1f},  A^max = {amax}")
 
 lam_quat = 6.0;  lam_abel = 8.0
@@ -373,7 +373,7 @@ d_D, spec_D, lv_D = all_spectra['S_D order-10  (d=24)']
 print(f"\n  {'Irrep':22s} dim   mu     lambda   A^max")
 for name, data in spec_D.items():
     lam  = data['lambda']
-    amax = "inf" if lam < 1e-10 else f"c_chi/sqrt({lam:.4g})"
+    amax = "inf" if lam < 1e-10 else f"c_BI/sqrt({lam:.4g})"
     print(f"  {name:22s} {data['dim']:3d}  {data['mu']:6.3f}  {lam:7.3f}   {amax}")
 
 # ------ 2e. Golden ratio identity ------
@@ -429,13 +429,13 @@ pw_quat = [(lam, psi) for label, (lam, psi) in PW.items() if 'rho4' in label]
 pw_abel = [(lam, psi) for label, (lam, psi) in PW.items() if 'rho' in label and 'rho4' not in label]
 
 print(f"\nQ8 sectors:")
-print(f"  quaternionic (rho4): {len(pw_quat)} modes, lambda=6,  A^max = c_chi/sqrt(6)")
-print(f"  abelian (rho1-3):    {len(pw_abel)} modes, lambda=8,  A^max = c_chi/sqrt(8)")
+print(f"  quaternionic (rho4): {len(pw_quat)} modes, lambda=6,  A^max = c_BI/sqrt(6)")
+print(f"  abelian (rho1-3):    {len(pw_abel)} modes, lambda=8,  A^max = c_BI/sqrt(8)")
 
-c_chi   = 1.0
-Amax_q  = c_chi / np.sqrt(6.0)
-Amax_a  = c_chi / np.sqrt(8.0)
-print(f"  c_chi = {c_chi},  A^max_quat = {Amax_q:.6f},  A^max_abel = {Amax_a:.6f}")
+c_BI   = 1.0
+Amax_q  = c_BI / np.sqrt(6.0)
+Amax_a  = c_BI / np.sqrt(8.0)
+print(f"  c_BI = {c_BI},  A^max_quat = {Amax_q:.6f},  A^max_abel = {Amax_a:.6f}")
 
 def sector_amplitude(chi_vec, modes):
     """
@@ -449,7 +449,7 @@ def sector_amplitude(chi_vec, modes):
         A_max = max(A_max, abs(a_n) * psi_inf)
     return A_max
 
-def simulate_dbi(chi0, pi0, c_chi, dt, n_steps):
+def simulate_dbi(chi0, pi0, c_BI, dt, n_steps):
     """
     Symplectic (leapfrog / Stormer-Verlet) integration of the Q8 DBI system.
 
@@ -475,7 +475,7 @@ def simulate_dbi(chi0, pi0, c_chi, dt, n_steps):
     An_abel = np.zeros(n_steps + 1)
 
     def chi_dot(pi_vec):
-        return pi_vec / np.sqrt(1.0 + (pi_vec / c_chi)**2)
+        return pi_vec / np.sqrt(1.0 + (pi_vec / c_BI)**2)
 
     def force(chi_vec):
         return -(L_Q8 @ chi_vec)
@@ -494,8 +494,8 @@ def simulate_dbi(chi0, pi0, c_chi, dt, n_steps):
         # Enforce sub-luminal constraint (clip if numerical drift pushes over)
         v       = chi_dot(pi)
         max_v   = np.max(np.abs(v))
-        if max_v > 0.9999 * c_chi:
-            pi *= (0.9999 * c_chi / max_v)
+        if max_v > 0.9999 * c_BI:
+            pi *= (0.9999 * c_BI / max_v)
 
         t_arr[step + 1] = (step + 1) * dt
         record(step + 1)
@@ -528,7 +528,7 @@ n_steps = 3000
 print(f"\nSimulation: dt={dt}, n_steps={n_steps}, T_max={n_steps*dt:.1f}")
 print(f"  Initial condition: {frac*100:.0f}% of A^max in each sector")
 
-t_arr, chi_final, An_quat, An_abel = simulate_dbi(chi0, pi0, c_chi, dt, n_steps)
+t_arr, chi_final, An_quat, An_abel = simulate_dbi(chi0, pi0, c_BI, dt, n_steps)
 
 print(f"\n  Time series (saturation fraction A/A^max):")
 print(f"  {'t':>8}  {'quat/A^max_q':>14}  {'abel/A^max_a':>14}")
@@ -562,7 +562,7 @@ try:
     # --- Figure 1: Admissibility envelope on Q8 ---
     fig, ax = plt.subplots(figsize=(7, 4.5))
     x_lam = np.linspace(0.3, 10.5, 400)
-    ax.plot(x_lam, c_chi / np.sqrt(x_lam), 'k-', lw=2,
+    ax.plot(x_lam, c_BI / np.sqrt(x_lam), 'k-', lw=2,
             label=r'$A^{\max} = c_\chi/\sqrt{\lambda}$')
     pts = [
         (6.0, Amax_q, 'C0', r'quaternionic $\rho_4$  ($\lambda=6$)'),

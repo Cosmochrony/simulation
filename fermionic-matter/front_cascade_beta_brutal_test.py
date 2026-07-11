@@ -9,7 +9,7 @@ Corpus anchors (no fit):
   * SpectralRelaxation Beau2026relax: the single-level ADE mechanism (Kesten-McKay x dim rho) gives mass ratios of
     ORDER UNITY and inter-level separations of only 0.08-0.18 log-decades; the ADE spectral ratios lie in [1.5, 2.0]
     (R=3/2 sits there). Amplification to 10^5-10^17 requires a rapidly growing growth law Lambda_proj(n) along the
-    cascade depth n, controlled by the flux bound c_chi(n); scalar power-law calibrations are ruled out (no-go).
+    cascade depth n, controlled by the flux bound c_BI(n); scalar power-law calibrations are ruled out (no-go).
   * O16 Beau2026o16: cascade exponent beta* = 1/(delta + 1/2); with delta in [7.4, 10.6], beta* in [0.090, 0.127].
 
 Test logic: stack the only two corpus-fixed O(1) factors (the PYO split and the single-level cascade factor) and

@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 
 
 class CosmoSim:
-    def __init__(self, name="Q8", c_chi=1.0):
+    def __init__(self, name="Q8", c_BI=1.0):
         self.name = name
-        self.c_chi = float(c_chi)  # Substrate flux bound
+        self.c_BI = float(c_BI)  # Substrate flux bound
         self._setup_graph()
 
     def _setup_graph(self):
@@ -50,7 +50,7 @@ class CosmoSim:
 
         # DBI freezing factor: (1 - v^2 / c^2)^(3/2)
         # Numerical clipping avoids NaNs near the saturation limit
-        v_ratio = np.clip(v**2 / self.c_chi**2, 0.0, 0.999)
+        v_ratio = np.clip(v**2 / self.c_BI**2, 0.0, 0.999)
         freeze_factor = (1.0 - v_ratio)**1.5
 
         accel = force * freeze_factor
