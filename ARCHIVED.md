@@ -8,9 +8,8 @@ See `../SIMULATION-RELOCATION-STATUS.md` for the full mapping, method, and per-r
 
 ## What remains here
 
-- Two scripts still pending relocation into `white-paper` (blocked at archival time by an in-progress edit there):
-  - `scripts/critical_tests_cosmochrony.py` → `white-paper/code/`
-  - `scripts/collect_D4_csv.py` → `white-paper/appendix-d4/`
+- No scripts remain: all Python scripts have been relocated (including the last two into `white-paper/code/` and
+  `white-paper/appendix-d4/`).
 - Datasets, which were **copied** (not moved) to the relevant repos and are kept here as the archived source of record:
   - `data/Planck`, `data/Rotmod_LTG` → also in `cosmology-paper/data/`
   - `appendix_D4/`, `D-appendix-technical/`, `figures/*D4*` → also in `white-paper/appendix-d4/`
